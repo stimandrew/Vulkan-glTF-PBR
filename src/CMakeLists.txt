@@ -4,13 +4,19 @@ file(GLOB SHADERS "../data/shaders/*.vert" "../data/shaders/*.frag" "../data/sha
 file(GLOB SHADER_INCLUDES "../data/shaders/includes/*.glsl")
 source_group("Shaders" FILES ${SHADERS})
 source_group("Shaders\\Includes" FILES ${SHADER_INCLUDES})
+
+# Добавляем заголовочные файлы
+file(GLOB HEADERS "*.h")
+source_group("Header Files" FILES ${HEADERS})
+
 if(WIN32)
-	add_executable(${EXAMPLE_NAME} WIN32 ${MAIN_CPP} ${SOURCE} ${SHADERS} ${SHADER_INCLUDES})
-	target_link_libraries(${EXAMPLE_NAME} base ${Vulkan_LIBRARY} ${WINLIBS})
+    add_executable(${EXAMPLE_NAME} WIN32 ${MAIN_CPP} ${SOURCE} ${HEADERS} ${SHADERS} ${SHADER_INCLUDES})
+    target_link_libraries(${EXAMPLE_NAME} base ${Vulkan_LIBRARY} ${WINLIBS})
 else(WIN32)
-	add_executable(${EXAMPLE_NAME} ${MAIN_CPP} ${SOURCE} ${SHADERS} ${SHADER_INCLUDES})
-	target_link_libraries(${EXAMPLE_NAME} base )
+    add_executable(${EXAMPLE_NAME} ${MAIN_CPP} ${SOURCE} ${HEADERS} ${SHADERS} ${SHADER_INCLUDES})
+    target_link_libraries(${EXAMPLE_NAME} base )
 endif(WIN32)
+
 if(RESOURCE_INSTALL_DIR)
-	install(TARGETS ${EXAMPLE_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(TARGETS ${EXAMPLE_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
