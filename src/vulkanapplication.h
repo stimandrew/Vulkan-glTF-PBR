@@ -36,6 +36,7 @@ private:
         VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
         VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
         bool initialized = false;
+        bool needsRecreate = false;
     } backgroundRes;
 
     void createBackgroundResources();

@@ -59,6 +59,9 @@ void VulkanApplication::loadBackground(std::string filename)
     }
 
     textures.background.loadFromJPG(filename, vulkanDevice, queue);
+
+    // При загрузке нового фона, просто обновим дескриптор в следующем кадре
+    // Не пересоздаем ресурсы, так как они уже существуют
 }
 
 void VulkanApplication::renderBackground()
@@ -338,6 +341,12 @@ void VulkanApplication::renderBackgroundInCommandBuffer(VkCommandBuffer commandB
         return;
     }
 
+    // Если нужно пересоздать ресурсы (например, после загрузки новой сцены)
+    if (backgroundRes.needsRecreate) {
+        destroyBackgroundResources();
+        backgroundRes.needsRecreate = false;
+    }
+
     // Создаем ресурсы если нужно
     if (!backgroundRes.initialized) {
         createBackgroundResources();
@@ -365,6 +374,12 @@ void VulkanApplication::createBackgroundResources()
 {
     if (backgroundRes.initialized) return;
 
+    // Убедимся что descriptorPool существует
+    if (descriptorPool == VK_NULL_HANDLE) {
+        std::cerr << "Error: descriptorPool is null when creating background resources!" << std::endl;
+        return;
+    }
+
     // Создаем дескриптор сет лайаут
     VkDescriptorSetLayoutBinding layoutBinding = {
         0,
@@ -386,7 +401,12 @@ void VulkanApplication::createBackgroundResources()
     allocInfo.descriptorPool = descriptorPool;
     allocInfo.descriptorSetCount = 1;
     allocInfo.pSetLayouts = &backgroundRes.descriptorSetLayout;
-    VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &backgroundRes.descriptorSet));
+
+    VkResult result = vkAllocateDescriptorSets(device, &allocInfo, &backgroundRes.descriptorSet);
+    if (result != VK_SUCCESS) {
+        std::cerr << "Failed to allocate background descriptor set: " << result << std::endl;
+        return;
+    }
 
     // Создаем pipeline layout
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
@@ -416,7 +436,7 @@ void VulkanApplication::createBackgroundResources()
 
     VkPipelineRasterizationStateCreateInfo rasterizer{};
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.cullMode = VK_CULL_MODE_NONE; // Важно: не отсекаем ничего для фона
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.lineWidth = 1.0f;
 
@@ -446,8 +466,8 @@ void VulkanApplication::createBackgroundResources()
 
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
     depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depthStencil.depthTestEnable = VK_FALSE;  // Отключаем тест глубины для фона
-    depthStencil.depthWriteEnable = VK_FALSE; // Отключаем запись в глубину
+    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
@@ -487,10 +507,8 @@ void VulkanApplication::destroyBackgroundResources()
         vkDestroyDescriptorSetLayout(device, backgroundRes.descriptorSetLayout, nullptr);
         backgroundRes.descriptorSetLayout = VK_NULL_HANDLE;
     }
-    if (backgroundRes.descriptorSet != VK_NULL_HANDLE) {
-        vkFreeDescriptorSets(device, descriptorPool, 1, &backgroundRes.descriptorSet);
-        backgroundRes.descriptorSet = VK_NULL_HANDLE;
-    }
+    // Не освобождаем descriptorSet отдельно, так как он будет освобожден при уничтожении descriptorPool
+    backgroundRes.descriptorSet = VK_NULL_HANDLE;
     backgroundRes.initialized = false;
 }
 
@@ -628,15 +646,25 @@ void VulkanApplication::updateMeshDataBuffer(uint32_t index)
 void VulkanApplication::loadScene(std::string filename)
 {
     std::cout << "Loading scene from " << filename << std::endl;
+
+    // Уничтожаем старую сцену
     models.scene.destroy(device);
+
+    // Помечаем что ресурсы фона нужно будет пересоздать после загрузки новой сцены
+    // потому что descriptorPool будет пересоздан в setupDescriptors()
+    backgroundRes.needsRecreate = true;
+
     animationIndex = 0;
     animationTimer = 0.0f;
+
     auto tStart = std::chrono::high_resolution_clock::now();
     models.scene.loadFromFile(filename, vulkanDevice, queue);
     createMaterialBuffer();
     createMeshDataBuffer();
+
     auto tFileLoad = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - tStart).count();
     std::cout << "Loading took " << tFileLoad << " ms" << std::endl;
+
     for (auto& ext : models.scene.extensions) {
         if (std::find(supportedExtensions.begin(), supportedExtensions.end(), ext) == supportedExtensions.end()) {
             std::cout << "[WARN] Unsupported extension " << ext << " detected. Scene may not work or display as intended\n";
@@ -733,6 +761,8 @@ void VulkanApplication::setupDescriptors()
     descriptorPoolCI.pPoolSizes = poolSizes.data();
     descriptorPoolCI.maxSets = (2 + materialCount + meshCount) * swapChain.imageCount;
     VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolCI, nullptr, &descriptorPool));
+
+    backgroundRes.needsRecreate = true;
 
     {
         std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
@@ -948,6 +978,8 @@ void VulkanApplication::setupDescriptors()
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
     }
+
+    backgroundRes.needsRecreate = true;
 }
 
 void VulkanApplication::addPipelineSet(const std::string prefix, const std::string vertexShader, const std::string fragmentShader)
