@@ -28,13 +28,30 @@
 */
 class VulkanApplication : public VulkanExampleBase
 {
+    // Добавьте в класс VulkanApplication в private секцию:
+private:
+    struct BackgroundResources {
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+        bool initialized = false;
+    } backgroundRes;
+
+    void createBackgroundResources();
+    void destroyBackgroundResources();
+
 public:
+
+    bool useStaticBackground = false;  // Флаг использования статичного фона
+    std::string backgroundFile;  // Путь к файлу фона
     struct Textures {
         vks::TextureCubeMap environmentCube;
         vks::Texture2D empty;
         vks::Texture2D lutBrdf;
         vks::TextureCubeMap irradianceCube;
         vks::TextureCubeMap prefilteredCube;
+        vks::Texture2D background;
     } textures;
 
     struct Models {
@@ -106,6 +123,9 @@ public:
 
     UI* ui{ nullptr };
 
+    void loadBackground(std::string filename);  // Новый метод загрузки фона
+    void renderBackground();  // Новый метод рендера фона
+    void renderBackgroundInCommandBuffer(VkCommandBuffer commandBuffer);
 #if defined(VK_USE_PLATFORM_ANDROID_KHR)
     const std::string assetpath = "";
 #else

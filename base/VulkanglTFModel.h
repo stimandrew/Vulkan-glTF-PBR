@@ -7,7 +7,7 @@
  */
 
 #pragma once
-
+// #define TINYGLTF_NO_STB_IMAGE
 #include <iostream>
 #include <stdlib.h>
 #include <string>
