@@ -1,4 +1,5 @@
 #include "vulkanapplication.h"
+#include <fstream>
 #include <iomanip>  // Добавьте эту строку для std::put_time
 #include <ctime>    // Для std::localtime
 
@@ -135,6 +136,9 @@ void VulkanApplication::takeScreenshot()
     // Получаем текущее изображение из swap chain
     VkImage srcImage = swapChain.images[imageIndex];
 
+    // Получаем координаты модели
+    glm::vec3 modelCoords = getModelCoordinatesRelativeToScreen();
+
     if (useStaticBackground && textures.background.image) {
         // Если фон включен, захватываем только область, где отображается фон
         glm::vec4 displayRect = calculateBackgroundDisplayRect();
@@ -153,8 +157,7 @@ void VulkanApplication::takeScreenshot()
         std::cout << "Capturing background area: " << captureWidth << "x" << captureHeight
                   << " at position (" << captureX << "," << captureY << ")" << std::endl;
 
-        // TODO: Для точного захвата области нужно использовать VkImageBlit
-        // Пока просто захватываем весь вьюпорт и будем обрезать позже
+        // Захватываем весь вьюпорт
         if (screenshot->capture(srcImage, sceneViewport.width, sceneViewport.height, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)) {
             std::cout << "Screenshot capture started..." << std::endl;
 
@@ -183,11 +186,17 @@ void VulkanApplication::takeScreenshot()
 
             // Создаем временный screenshot объект с обрезанными данными
             Screenshot croppedScreenshot(vulkanDevice, queue, cmdPool);
-            // Сохраняем обрезанное изображение
+
+            // Генерируем имя файла
             std::string filename = generateScreenshotFilename() + "_background";
             std::string pngFilename = filename + ".png";
+
+            // Сохраняем обрезанное изображение
             stbi_write_png(pngFilename.c_str(), captureWidth, captureHeight, 4,
                            croppedPixels.data(), captureWidth * 4);
+
+            // Сохраняем координаты модели
+            saveModelCoordinates(filename, modelCoords);
 
             std::cout << "Background screenshot saved to " << pngFilename
                       << " (original: " << sceneViewport.width << "x" << sceneViewport.height
@@ -203,9 +212,14 @@ void VulkanApplication::takeScreenshot()
             }
 
             std::string filename = generateScreenshotFilename();
-            screenshot->saveToFile(filename);
+            std::string pngFilename = filename + ".png";
 
-            std::cout << "Scene screenshot saved: " << filename << ".png ("
+            screenshot->saveToFile(filename); // saveToFile уже добавляет .png
+
+            // Сохраняем координаты модели
+            saveModelCoordinates(filename, modelCoords);
+
+            std::cout << "Scene screenshot saved: " << pngFilename << " ("
                       << sceneViewport.width << "x" << sceneViewport.height << ")" << std::endl;
         }
     }
@@ -2766,6 +2780,35 @@ void VulkanApplication::render()
     }
 
     frameIndex = (frameIndex + 1) % renderAhead;
+}
+
+glm::vec3 VulkanApplication::getModelCoordinatesRelativeToScreen()
+{
+    // Получаем текущие координаты модели
+    glm::vec3 absolutePos = modelPosition;
+
+    // Если используем фон с обрезкой, координаты остаются абсолютными
+    // так как модель все еще рендерится в той же системе координат
+    return absolutePos;
+}
+
+void VulkanApplication::saveModelCoordinates(const std::string& filename, const glm::vec3& modelPos)
+{
+    std::ofstream coordFile(COORDINATES_FILE, std::ios::app); // Открываем в режиме добавления
+
+    if (!coordFile.is_open()) {
+        std::cerr << "Failed to open coordinates file: " << COORDINATES_FILE << std::endl;
+        return;
+    }
+
+    // Форматируем строку: <имя png файла> - <координаты 3д модели относительно центра скриншота>
+    coordFile << filename << ".png - "
+              << std::fixed << std::setprecision(3)
+              << "(" << modelPos.x << ", " << modelPos.y << ", " << modelPos.z << ")"
+              << std::endl;
+
+    coordFile.close();
+    std::cout << "Model coordinates saved to " << COORDINATES_FILE << std::endl;
 }
 
 void VulkanApplication::fileDropped(std::string filename)

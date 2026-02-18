@@ -43,6 +43,11 @@ private:
     void destroyBackgroundResources();
 
 public:
+    void saveModelCoordinates(const std::string& filename, const glm::vec3& modelPos);
+    glm::vec3 getModelCoordinatesRelativeToScreen();
+
+    // Константа для файла с координатами
+    static constexpr const char* COORDINATES_FILE = "coordinate.txt";
     glm::vec4 calculateBackgroundDisplayRect();
     Screenshot* screenshot = nullptr;
     void takeScreenshot();
