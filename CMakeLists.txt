@@ -164,6 +164,8 @@ if(NOT SKIP_SHADER_COMPILATION)
         "${SHADER_SOURCE_DIR}/*.rgen"
         "${SHADER_SOURCE_DIR}/*.rchit"
         "${SHADER_SOURCE_DIR}/*.rmiss"
+        "${SHADER_SOURCE_DIR}/ui_background.vert"  # Добавлено
+        "${SHADER_SOURCE_DIR}/ui_background.frag"  # Добавлено
     )
 
     # Компилируем все найденные шейдеры

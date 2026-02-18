@@ -28,7 +28,6 @@
 */
 class VulkanApplication : public VulkanExampleBase
 {
-    // Добавьте в класс VulkanApplication в private секцию:
 private:
     struct BackgroundResources {
         VkPipeline pipeline = VK_NULL_HANDLE;
@@ -44,8 +43,55 @@ private:
 
 public:
 
-    bool useStaticBackground = false;  // Флаг использования статичного фона
-    std::string backgroundFile;  // Путь к файлу фона
+    struct BackgroundPushConstants {
+        glm::vec2 viewportSize;
+        glm::vec2 imageSize;
+        glm::vec2 offset;
+    } backgroundPushConstants;
+
+    bool useStaticBackground = false;
+    std::string backgroundFile;
+
+    // Структура для хранения информации о viewport'ах
+    struct Viewport {
+        uint32_t x;
+        uint32_t y;
+        uint32_t width;
+        uint32_t height;
+        VkViewport vkViewport;
+        VkRect2D vkScissor;
+    };
+
+    // Основные viewport'ы
+    Viewport sceneViewport;  // Для 3D сцены
+    Viewport uiViewport;     // Для панели управления
+
+    // Настройки разделения экрана
+    bool splitScreenEnabled = true;  // Включено ли разделение
+    uint32_t uiPanelWidth = 400;     // Ширина панели UI в пикселях
+    uint32_t uiPanelHeight;          // Высота панели UI (будет равна высоте окна)
+
+    // Отдельные наборы дескрипторов для разных областей
+    VkDescriptorSet uiBackgroundDescriptorSet = VK_NULL_HANDLE;
+    VkPipeline uiBackgroundPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout uiBackgroundPipelineLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout uiBackgroundDescriptorSetLayout = VK_NULL_HANDLE;
+
+    // Вершинный буфер для полноэкранного квада
+    struct {
+        VkBuffer buffer;
+        VkDeviceMemory memory;
+        VkDeviceSize size;
+    } fullscreenQuad;
+
+    void createFullscreenQuad();
+    void destroyFullscreenQuad();
+    void createUIResources();
+    void destroyUIResources();
+    void updateViewports();
+    void recordSceneCommandBuffer(VkCommandBuffer commandBuffer);
+    void recordUICommandBuffer(VkCommandBuffer commandBuffer);
+
     struct Textures {
         vks::TextureCubeMap environmentCube;
         vks::Texture2D empty;
@@ -102,6 +148,7 @@ public:
     std::vector<DescriptorSets> descriptorSets;
 
     std::vector<VkCommandBuffer> commandBuffers;
+    std::vector<VkCommandBuffer> uiCommandBuffers;
     std::vector<UniformBufferSet> uniformBuffers;
 
     std::vector<VkFence> waitFences;
@@ -124,9 +171,10 @@ public:
 
     UI* ui{ nullptr };
 
-    void loadBackground(std::string filename);  // Новый метод загрузки фона
-    void renderBackground();  // Новый метод рендера фона
-    void renderBackgroundInCommandBuffer(VkCommandBuffer commandBuffer);
+    void loadBackground(std::string filename);
+    void renderBackground();
+    void renderBackgroundInCommandBuffer(VkCommandBuffer commandBuffer, const Viewport& viewport);
+
 #if defined(VK_USE_PLATFORM_ANDROID_KHR)
     const std::string assetpath = "";
 #else
@@ -186,14 +234,12 @@ public:
         "KHR_materials_emissive_strength"
     };
 
-    // Constructor and Destructor declarations
     VulkanApplication();
     ~VulkanApplication();
 
-    // Method declarations
     void resetCamera();
     void renderNode(vkglTF::Node *node, uint32_t cbIndex, vkglTF::Material::AlphaMode alphaMode);
-    void recordCommandBuffer();
+    void recordCommandBuffer(); // Убрано override
     void createMaterialBuffer();
     void createMeshDataBuffer();
     void updateMeshDataBuffer(uint32_t index);

@@ -13,6 +13,9 @@ VulkanApplication::VulkanApplication() : VulkanExampleBase()
 VulkanApplication::~VulkanApplication()
 {
     destroyBackgroundResources();
+    destroyUIResources();
+    destroyFullscreenQuad();
+
     for (auto& pipeline : pipelines) {
         vkDestroyPipeline(device, pipeline.second, nullptr);
     }
@@ -50,65 +53,129 @@ VulkanApplication::~VulkanApplication()
     delete ui;
 }
 
-void VulkanApplication::loadBackground(std::string filename)
+void VulkanApplication::createFullscreenQuad()
 {
-    std::cout << "Loading background from " << filename << std::endl;
+    // Вершины для полноэкранного квада (2 треугольника)
+    struct Vertex {
+        float pos[2];
+        float uv[2];
+    };
 
-    if (textures.background.image) {
-        textures.background.destroy();
-    }
+    std::vector<Vertex> vertices = {
+        { {-1.0f, -1.0f}, {0.0f, 1.0f} },
+        { { 1.0f, -1.0f}, {1.0f, 1.0f} },
+        { { 1.0f,  1.0f}, {1.0f, 0.0f} },
+        { {-1.0f,  1.0f}, {0.0f, 0.0f} }
+    };
 
-    textures.background.loadFromJPG(filename, vulkanDevice, queue);
+    std::vector<uint16_t> indices = { 0, 1, 2, 2, 3, 0 };
 
-    // При загрузке нового фона, просто обновим дескриптор в следующем кадре
-    // Не пересоздаем ресурсы, так как они уже существуют
+    VkDeviceSize vertexBufferSize = vertices.size() * sizeof(Vertex);
+    VkDeviceSize indexBufferSize = indices.size() * sizeof(uint16_t);
+    fullscreenQuad.size = vertexBufferSize + indexBufferSize;
+
+    // Создаем staging буфер
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingMemory;
+
+    VkBufferCreateInfo bufferCreateInfo{};
+    bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferCreateInfo.size = fullscreenQuad.size;
+    bufferCreateInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VK_CHECK_RESULT(vkCreateBuffer(device, &bufferCreateInfo, nullptr, &stagingBuffer));
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(device, stagingBuffer, &memReqs);
+
+    VkMemoryAllocateInfo memAllocInfo{};
+    memAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    memAllocInfo.allocationSize = memReqs.size;
+    memAllocInfo.memoryTypeIndex = vulkanDevice->getMemoryType(memReqs.memoryTypeBits,
+                                                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    VK_CHECK_RESULT(vkAllocateMemory(device, &memAllocInfo, nullptr, &stagingMemory));
+    VK_CHECK_RESULT(vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0));
+
+    // Копируем данные в staging буфер
+    uint8_t* data;
+    VK_CHECK_RESULT(vkMapMemory(device, stagingMemory, 0, memReqs.size, 0, (void**)&data));
+    memcpy(data, vertices.data(), vertexBufferSize);
+    memcpy(data + vertexBufferSize, indices.data(), indexBufferSize);
+    vkUnmapMemory(device, stagingMemory);
+
+    // Создаем финальный буфер
+    bufferCreateInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VK_CHECK_RESULT(vkCreateBuffer(device, &bufferCreateInfo, nullptr, &fullscreenQuad.buffer));
+
+    vkGetBufferMemoryRequirements(device, fullscreenQuad.buffer, &memReqs);
+    memAllocInfo.allocationSize = memReqs.size;
+    memAllocInfo.memoryTypeIndex = vulkanDevice->getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    VK_CHECK_RESULT(vkAllocateMemory(device, &memAllocInfo, nullptr, &fullscreenQuad.memory));
+    VK_CHECK_RESULT(vkBindBufferMemory(device, fullscreenQuad.buffer, fullscreenQuad.memory, 0));
+
+    // Копируем из staging в финальный буфер
+    VkCommandBuffer copyCmd = vulkanDevice->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+
+    VkBufferCopy copyRegion{};
+    copyRegion.size = fullscreenQuad.size;
+    vkCmdCopyBuffer(copyCmd, stagingBuffer, fullscreenQuad.buffer, 1, &copyRegion);
+
+    vulkanDevice->flushCommandBuffer(copyCmd, queue, true);
+
+    vkDestroyBuffer(device, stagingBuffer, nullptr);
+    vkFreeMemory(device, stagingMemory, nullptr);
 }
 
-void VulkanApplication::renderBackground()
+void VulkanApplication::destroyFullscreenQuad()
 {
-    if (!useStaticBackground || !textures.background.image) {
-        return;
+    if (fullscreenQuad.buffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device, fullscreenQuad.buffer, nullptr);
+        fullscreenQuad.buffer = VK_NULL_HANDLE;
     }
+    if (fullscreenQuad.memory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, fullscreenQuad.memory, nullptr);
+        fullscreenQuad.memory = VK_NULL_HANDLE;
+    }
+}
 
-    // Создаем отдельный набор дескрипторов для фона
-    VkDescriptorSetLayout backgroundLayout;
-    VkDescriptorSetLayoutBinding layoutBinding = { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                                  1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
+void VulkanApplication::createUIResources()
+{
+    // Создаем дескриптор сет лайаут для фона UI
+    VkDescriptorSetLayoutBinding layoutBinding = {
+        0,
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        1,
+        VK_SHADER_STAGE_FRAGMENT_BIT,
+        nullptr
+    };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = 1;
     layoutInfo.pBindings = &layoutBinding;
-    vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &backgroundLayout);
+    VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &uiBackgroundDescriptorSetLayout));
 
-    VkDescriptorSet backgroundSet;
+    // Создаем дескриптор сет
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = descriptorPool;
     allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &backgroundLayout;
-    vkAllocateDescriptorSets(device, &allocInfo, &backgroundSet);
+    allocInfo.pSetLayouts = &uiBackgroundDescriptorSetLayout;
+    VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &uiBackgroundDescriptorSet));
 
-    VkWriteDescriptorSet descriptorWrite{};
-    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrite.dstSet = backgroundSet;
-    descriptorWrite.dstBinding = 0;
-    descriptorWrite.descriptorCount = 1;
-    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    descriptorWrite.pImageInfo = &textures.background.descriptor;
-    vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
-
-    // Создаем pipeline для фона
-    VkPipelineLayout pipelineLayout;
+    // Создаем pipeline layout
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &backgroundLayout;
-    vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout);
+    pipelineLayoutInfo.pSetLayouts = &uiBackgroundDescriptorSetLayout;
+    VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &uiBackgroundPipelineLayout));
 
-    // Создаем шейдеры для фона
-    auto vertShader = loadShader(device, "background.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-    auto fragShader = loadShader(device, "background.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+    // Создаем шейдеры для фона UI
+    auto vertShader = loadShader(device, "ui_background.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+    auto fragShader = loadShader(device, "ui_background.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
     VkPipelineShaderStageCreateInfo shaderStages[] = { vertShader, fragShader };
 
@@ -127,7 +194,7 @@ void VulkanApplication::renderBackground()
 
     VkPipelineRasterizationStateCreateInfo rasterizer{};
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.lineWidth = 1.0f;
 
@@ -166,28 +233,160 @@ void VulkanApplication::renderBackground()
     pipelineInfo.pMultisampleState = &multisampling;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
-    pipelineInfo.layout = pipelineLayout;
+    pipelineInfo.layout = uiBackgroundPipelineLayout;
     pipelineInfo.renderPass = renderPass;
 
-    VkPipeline pipeline;
-    vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineInfo, nullptr, &pipeline);
+    VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineInfo, nullptr, &uiBackgroundPipeline));
 
-    // Рендерим фон
-    VkCommandBuffer commandBuffer = commandBuffers[frameIndex];
-
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipelineLayout, 0, 1, &backgroundSet, 0, nullptr);
-
-    vkCmdDraw(commandBuffer, 3, 1, 0, 0);  // Рисуем полноэкранный треугольник
-
-    // Очистка
-    vkDestroyPipeline(device, pipeline, nullptr);
-    vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-    vkDestroyDescriptorSetLayout(device, backgroundLayout, nullptr);
-    vkFreeDescriptorSets(device, descriptorPool, 1, &backgroundSet);
     vkDestroyShaderModule(device, vertShader.module, nullptr);
     vkDestroyShaderModule(device, fragShader.module, nullptr);
+}
+
+void VulkanApplication::destroyUIResources()
+{
+    if (uiBackgroundPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, uiBackgroundPipeline, nullptr);
+        uiBackgroundPipeline = VK_NULL_HANDLE;
+    }
+    if (uiBackgroundPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, uiBackgroundPipelineLayout, nullptr);
+        uiBackgroundPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (uiBackgroundDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device, uiBackgroundDescriptorSetLayout, nullptr);
+        uiBackgroundDescriptorSetLayout = VK_NULL_HANDLE;
+    }
+    uiBackgroundDescriptorSet = VK_NULL_HANDLE;
+}
+
+void VulkanApplication::updateViewports()
+{
+    // Обновляем размеры viewport'ов при изменении окна
+    if (splitScreenEnabled) {
+        // Сцена занимает левую часть окна (всю ширину минус ширина панели UI)
+        sceneViewport.x = 0;
+        sceneViewport.y = 0;
+        sceneViewport.width = std::max(width - uiPanelWidth, 1u);
+        sceneViewport.height = height;
+        uiPanelHeight = height;
+
+        // Панель UI занимает правую часть
+        uiViewport.x = sceneViewport.width;
+        uiViewport.y = 0;
+        uiViewport.width = uiPanelWidth;
+        uiViewport.height = height;
+    } else {
+        // Если разделение выключено, весь экран для сцены
+        sceneViewport.x = 0;
+        sceneViewport.y = 0;
+        sceneViewport.width = width;
+        sceneViewport.height = height;
+
+        uiViewport.x = 0;
+        uiViewport.y = 0;
+        uiViewport.width = width;
+        uiViewport.height = height;
+    }
+
+    // Обновляем Vulkan viewport'ы
+    sceneViewport.vkViewport = {
+        static_cast<float>(sceneViewport.x),
+        static_cast<float>(sceneViewport.y),
+        static_cast<float>(sceneViewport.width),
+        static_cast<float>(sceneViewport.height),
+        0.0f, 1.0f
+    };
+
+    sceneViewport.vkScissor = {
+        { static_cast<int32_t>(sceneViewport.x), static_cast<int32_t>(sceneViewport.y) },
+        { sceneViewport.width, sceneViewport.height }
+    };
+
+    uiViewport.vkViewport = {
+        static_cast<float>(uiViewport.x),
+        static_cast<float>(uiViewport.y),
+        static_cast<float>(uiViewport.width),
+        static_cast<float>(uiViewport.height),
+        0.0f, 1.0f
+    };
+
+    uiViewport.vkScissor = {
+        { static_cast<int32_t>(uiViewport.x), static_cast<int32_t>(uiViewport.y) },
+        { uiViewport.width, uiViewport.height }
+    };
+
+    // Обновляем соотношение сторон камеры
+    camera.updateAspectRatio(static_cast<float>(sceneViewport.width) / static_cast<float>(sceneViewport.height));
+}
+
+void VulkanApplication::loadBackground(std::string filename)
+{
+    std::cout << "Loading background from " << filename << std::endl;
+
+    if (textures.background.image) {
+        textures.background.destroy();
+    }
+
+    textures.background.loadFromJPG(filename, vulkanDevice, queue);
+
+    // Размеры текстуры автоматически сохраняются в textures.background.width и .height
+    std::cout << "Background loaded: " << textures.background.width << "x" << textures.background.height << std::endl;
+}
+
+void VulkanApplication::renderBackground()
+{
+    if (!useStaticBackground || !textures.background.image) {
+        return;
+    }
+    // Этот метод больше не используется, используем renderBackgroundInCommandBuffer
+}
+
+void VulkanApplication::renderBackgroundInCommandBuffer(VkCommandBuffer commandBuffer, const Viewport& viewport)
+{
+    if (!useStaticBackground || !textures.background.image) {
+        return;
+    }
+
+    if (backgroundRes.needsRecreate) {
+        destroyBackgroundResources();
+        backgroundRes.needsRecreate = false;
+    }
+
+    if (!backgroundRes.initialized) {
+        createBackgroundResources();
+    }
+
+    // Устанавливаем viewport и scissor для этой области
+    vkCmdSetViewport(commandBuffer, 0, 1, &viewport.vkViewport);
+    vkCmdSetScissor(commandBuffer, 0, 1, &viewport.vkScissor);
+
+    // Обновляем дескриптор с текущей текстурой фона
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = backgroundRes.descriptorSet;
+    descriptorWrite.dstBinding = 0;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrite.pImageInfo = &textures.background.descriptor;
+    vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+
+    // Вычисляем push constants для сохранения пропорций
+    BackgroundPushConstants pushConstants;
+    pushConstants.viewportSize = glm::vec2(viewport.width, viewport.height);
+    pushConstants.imageSize = glm::vec2(textures.background.width, textures.background.height);
+    pushConstants.offset = glm::vec2(viewport.x, viewport.y);
+
+    // Передаем push constants
+    vkCmdPushConstants(commandBuffer, backgroundRes.pipelineLayout,
+                       VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                       sizeof(BackgroundPushConstants), &pushConstants);
+
+    // Рендерим фон
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, backgroundRes.pipeline);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            backgroundRes.pipelineLayout, 0, 1, &backgroundRes.descriptorSet, 0, nullptr);
+
+    vkCmdDraw(commandBuffer, 3, 1, 0, 0);
 }
 
 void VulkanApplication::resetCamera()
@@ -251,20 +450,14 @@ void VulkanApplication::renderNode(vkglTF::Node *node, uint32_t cbIndex, vkglTF:
     }
 }
 
-void VulkanApplication::recordCommandBuffer()
+void VulkanApplication::recordSceneCommandBuffer(VkCommandBuffer commandBuffer)
 {
-    vkResetCommandBuffer(commandBuffers[frameIndex], 0);
-
-    VkCommandBufferBeginInfo cmdBufferBeginInfo{};
-    cmdBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-
     VkClearValue clearValues[3];
     if (settings.multiSampling) {
         clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
         clearValues[1].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
         clearValues[2].depthStencil = { 1.0f, 0 };
-    }
-    else {
+    } else {
         clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
         clearValues[1].depthStencil = { 1.0f, 0 };
     }
@@ -272,48 +465,39 @@ void VulkanApplication::recordCommandBuffer()
     VkRenderPassBeginInfo renderPassBeginInfo{};
     renderPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassBeginInfo.renderPass = renderPass;
-    renderPassBeginInfo.renderArea.offset.x = 0;
-    renderPassBeginInfo.renderArea.offset.y = 0;
-    renderPassBeginInfo.renderArea.extent.width = width;
-    renderPassBeginInfo.renderArea.extent.height = height;
+    renderPassBeginInfo.renderArea.offset.x = static_cast<int32_t>(sceneViewport.x);
+    renderPassBeginInfo.renderArea.offset.y = static_cast<int32_t>(sceneViewport.y);
+    renderPassBeginInfo.renderArea.extent.width = sceneViewport.width;
+    renderPassBeginInfo.renderArea.extent.height = sceneViewport.height;
     renderPassBeginInfo.clearValueCount = settings.multiSampling ? 3 : 2;
     renderPassBeginInfo.pClearValues = clearValues;
     renderPassBeginInfo.framebuffer = frameBuffers[imageIndex];
 
-    VkCommandBuffer currentCB = commandBuffers[frameIndex];
+    vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    VK_CHECK_RESULT(vkBeginCommandBuffer(currentCB, &cmdBufferBeginInfo));
-    vkCmdBeginRenderPass(currentCB, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-    VkViewport viewport{};
-    viewport.width = (float)width;
-    viewport.height = (float)height;
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(currentCB, 0, 1, &viewport);
-
-    VkRect2D scissor{};
-    scissor.extent = { width, height };
-    vkCmdSetScissor(currentCB, 0, 1, &scissor);
+    vkCmdSetViewport(commandBuffer, 0, 1, &sceneViewport.vkViewport);
+    vkCmdSetScissor(commandBuffer, 0, 1, &sceneViewport.vkScissor);
 
     VkDeviceSize offsets[1] = { 0 };
 
-    // Рендерим фон если он загружен и включен
+    // Сначала рисуем фон (он будет на заднем плане)
     if (useStaticBackground && textures.background.image) {
-        renderBackgroundInCommandBuffer(currentCB);
+        renderBackgroundInCommandBuffer(commandBuffer, sceneViewport);
     }
 
+    // Затем небо (если включено)
     if (displayBackground) {
-        vkCmdBindDescriptorSets(currentCB, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[frameIndex].skybox, 0, nullptr);
-        vkCmdBindPipeline(currentCB, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines["skybox"]);
-        models.skybox.draw(currentCB);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[frameIndex].skybox, 0, nullptr);
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines["skybox"]);
+        models.skybox.draw(commandBuffer);
     }
 
+    // И только потом 3D сцену
     vkglTF::Model &model = models.scene;
 
-    vkCmdBindVertexBuffers(currentCB, 0, 1, &model.vertices.buffer, offsets);
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &model.vertices.buffer, offsets);
     if (model.indices.buffer != VK_NULL_HANDLE) {
-        vkCmdBindIndexBuffer(currentCB, model.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdBindIndexBuffer(commandBuffer, model.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
     }
 
     boundPipeline = VK_NULL_HANDLE;
@@ -328,59 +512,152 @@ void VulkanApplication::recordCommandBuffer()
         renderNode(node, frameIndex, vkglTF::Material::ALPHAMODE_BLEND);
     }
 
-    ui->draw(currentCB);
-
-    vkCmdEndRenderPass(currentCB);
-    VK_CHECK_RESULT(vkEndCommandBuffer(currentCB));
+    vkCmdEndRenderPass(commandBuffer);
 }
 
-// Добавим новый метод для рендеринга фона внутри command buffer
-void VulkanApplication::renderBackgroundInCommandBuffer(VkCommandBuffer commandBuffer)
+void VulkanApplication::recordUICommandBuffer(VkCommandBuffer commandBuffer)
 {
-    if (!useStaticBackground || !textures.background.image) {
-        return;
+    // Очищаем только область UI
+    VkClearValue clearValue;
+    clearValue.color = { { 0.2f, 0.2f, 0.2f, 1.0f } }; // Темно-серый фон для UI
+
+    VkRenderPassBeginInfo renderPassBeginInfo{};
+    renderPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassBeginInfo.renderPass = renderPass;
+    renderPassBeginInfo.renderArea.offset.x = static_cast<int32_t>(uiViewport.x);
+    renderPassBeginInfo.renderArea.offset.y = static_cast<int32_t>(uiViewport.y);
+    renderPassBeginInfo.renderArea.extent.width = uiViewport.width;
+    renderPassBeginInfo.renderArea.extent.height = uiViewport.height;
+    renderPassBeginInfo.clearValueCount = 1;
+    renderPassBeginInfo.pClearValues = &clearValue;
+    renderPassBeginInfo.framebuffer = frameBuffers[imageIndex];
+
+    vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    vkCmdSetViewport(commandBuffer, 0, 1, &uiViewport.vkViewport);
+    vkCmdSetScissor(commandBuffer, 0, 1, &uiViewport.vkScissor);
+
+    // Рисуем фон для UI
+    if (uiBackgroundDescriptorSet != VK_NULL_HANDLE && uiBackgroundPipeline != VK_NULL_HANDLE) {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, uiBackgroundPipeline);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                uiBackgroundPipelineLayout, 0, 1, &uiBackgroundDescriptorSet, 0, nullptr);
+        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
     }
 
-    // Если нужно пересоздать ресурсы (например, после загрузки новой сцены)
-    if (backgroundRes.needsRecreate) {
-        destroyBackgroundResources();
-        backgroundRes.needsRecreate = false;
+    // Рисуем UI элементы - создаем UIViewport из наших данных
+    UI::UIViewport uiVp;
+    uiVp.x = uiViewport.x;
+    uiVp.y = uiViewport.y;
+    uiVp.width = uiViewport.width;
+    uiVp.height = uiViewport.height;
+    uiVp.vkViewport = uiViewport.vkViewport;
+    uiVp.vkScissor = uiViewport.vkScissor;
+
+    ui->draw(commandBuffer, uiVp);
+
+    vkCmdEndRenderPass(commandBuffer);
+}
+
+void VulkanApplication::recordCommandBuffer()
+{
+    vkResetCommandBuffer(commandBuffers[frameIndex], 0);
+
+    VkCommandBufferBeginInfo cmdBufferBeginInfo{};
+    cmdBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+
+    VK_CHECK_RESULT(vkBeginCommandBuffer(commandBuffers[frameIndex], &cmdBufferBeginInfo));
+
+    if (splitScreenEnabled) {
+        // Если разделение включено, рендерим две области последовательно
+        recordSceneCommandBuffer(commandBuffers[frameIndex]);
+        recordUICommandBuffer(commandBuffers[frameIndex]);
+    } else {
+        // Иначе рендерим всё как обычно
+        VkClearValue clearValues[3];
+        if (settings.multiSampling) {
+            clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+            clearValues[1].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+            clearValues[2].depthStencil = { 1.0f, 0 };
+        } else {
+            clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+            clearValues[1].depthStencil = { 1.0f, 0 };
+        }
+
+        VkRenderPassBeginInfo renderPassBeginInfo{};
+        renderPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        renderPassBeginInfo.renderPass = renderPass;
+        renderPassBeginInfo.renderArea.offset.x = 0;
+        renderPassBeginInfo.renderArea.offset.y = 0;
+        renderPassBeginInfo.renderArea.extent.width = width;
+        renderPassBeginInfo.renderArea.extent.height = height;
+        renderPassBeginInfo.clearValueCount = settings.multiSampling ? 3 : 2;
+        renderPassBeginInfo.pClearValues = clearValues;
+        renderPassBeginInfo.framebuffer = frameBuffers[imageIndex];
+
+        vkCmdBeginRenderPass(commandBuffers[frameIndex], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        VkViewport viewport{};
+        viewport.width = (float)width;
+        viewport.height = (float)height;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(commandBuffers[frameIndex], 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.extent = { width, height };
+        vkCmdSetScissor(commandBuffers[frameIndex], 0, 1, &scissor);
+
+        if (useStaticBackground && textures.background.image) {
+            Viewport fullViewport;
+            fullViewport.vkViewport = viewport;
+            fullViewport.vkScissor = scissor;
+            renderBackgroundInCommandBuffer(commandBuffers[frameIndex], fullViewport);
+        }
+
+        if (displayBackground) {
+            vkCmdBindDescriptorSets(commandBuffers[frameIndex], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[frameIndex].skybox, 0, nullptr);
+            vkCmdBindPipeline(commandBuffers[frameIndex], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines["skybox"]);
+            models.skybox.draw(commandBuffers[frameIndex]);
+        }
+
+        vkglTF::Model &model = models.scene;
+
+        VkDeviceSize offsets[1] = { 0 };
+        vkCmdBindVertexBuffers(commandBuffers[frameIndex], 0, 1, &model.vertices.buffer, offsets);
+        if (model.indices.buffer != VK_NULL_HANDLE) {
+            vkCmdBindIndexBuffer(commandBuffers[frameIndex], model.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+        }
+
+        boundPipeline = VK_NULL_HANDLE;
+
+        for (auto node : model.nodes) {
+            renderNode(node, frameIndex, vkglTF::Material::ALPHAMODE_OPAQUE);
+        }
+        for (auto node : model.nodes) {
+            renderNode(node, frameIndex, vkglTF::Material::ALPHAMODE_MASK);
+        }
+        for (auto node : model.nodes) {
+            renderNode(node, frameIndex, vkglTF::Material::ALPHAMODE_BLEND);
+        }
+
+        ui->draw(commandBuffers[frameIndex]);
+
+        vkCmdEndRenderPass(commandBuffers[frameIndex]);
     }
 
-    // Создаем ресурсы если нужно
-    if (!backgroundRes.initialized) {
-        createBackgroundResources();
-    }
-
-    // Обновляем дескриптор с текущей текстурой фона
-    VkWriteDescriptorSet descriptorWrite{};
-    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrite.dstSet = backgroundRes.descriptorSet;
-    descriptorWrite.dstBinding = 0;
-    descriptorWrite.descriptorCount = 1;
-    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    descriptorWrite.pImageInfo = &textures.background.descriptor;
-    vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
-
-    // Рендерим фон
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, backgroundRes.pipeline);
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            backgroundRes.pipelineLayout, 0, 1, &backgroundRes.descriptorSet, 0, nullptr);
-
-    vkCmdDraw(commandBuffer, 3, 1, 0, 0);  // Рисуем полноэкранный треугольник
+    VK_CHECK_RESULT(vkEndCommandBuffer(commandBuffers[frameIndex]));
 }
 
 void VulkanApplication::createBackgroundResources()
 {
     if (backgroundRes.initialized) return;
 
-    // Убедимся что descriptorPool существует
     if (descriptorPool == VK_NULL_HANDLE) {
         std::cerr << "Error: descriptorPool is null when creating background resources!" << std::endl;
         return;
     }
 
-    // Создаем дескриптор сет лайаут
     VkDescriptorSetLayoutBinding layoutBinding = {
         0,
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -395,7 +672,6 @@ void VulkanApplication::createBackgroundResources()
     layoutInfo.pBindings = &layoutBinding;
     VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &backgroundRes.descriptorSetLayout));
 
-    // Создаем дескриптор сет
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = descriptorPool;
@@ -408,20 +684,25 @@ void VulkanApplication::createBackgroundResources()
         return;
     }
 
-    // Создаем pipeline layout
+    // Создаем pipeline layout с push constants
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(BackgroundPushConstants);
+
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = &backgroundRes.descriptorSetLayout;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
     VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &backgroundRes.pipelineLayout));
 
-    // Создаем шейдеры для фона
     auto vertShader = loadShader(device, "background.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
     auto fragShader = loadShader(device, "background.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
     VkPipelineShaderStageCreateInfo shaderStages[] = { vertShader, fragShader };
 
-    // Настройки pipeline
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
@@ -493,6 +774,7 @@ void VulkanApplication::createBackgroundResources()
     backgroundRes.initialized = true;
 }
 
+
 void VulkanApplication::destroyBackgroundResources()
 {
     if (backgroundRes.pipeline != VK_NULL_HANDLE) {
@@ -507,11 +789,9 @@ void VulkanApplication::destroyBackgroundResources()
         vkDestroyDescriptorSetLayout(device, backgroundRes.descriptorSetLayout, nullptr);
         backgroundRes.descriptorSetLayout = VK_NULL_HANDLE;
     }
-    // Не освобождаем descriptorSet отдельно, так как он будет освобожден при уничтожении descriptorPool
     backgroundRes.descriptorSet = VK_NULL_HANDLE;
     backgroundRes.initialized = false;
 }
-
 
 void VulkanApplication::createMaterialBuffer()
 {
@@ -647,11 +927,8 @@ void VulkanApplication::loadScene(std::string filename)
 {
     std::cout << "Loading scene from " << filename << std::endl;
 
-    // Уничтожаем старую сцену
     models.scene.destroy(device);
 
-    // Помечаем что ресурсы фона нужно будет пересоздать после загрузки новой сцены
-    // потому что descriptorPool будет пересоздан в setupDescriptors()
     backgroundRes.needsRecreate = true;
 
     animationIndex = 0;
@@ -752,14 +1029,14 @@ void VulkanApplication::setupDescriptors()
 
     std::vector<VkDescriptorPoolSize> poolSizes = {
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, (4 + meshCount) * swapChain.imageCount },
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, imageSamplerCount * swapChain.imageCount },
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, (imageSamplerCount + 2) * swapChain.imageCount },
         { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 + static_cast<uint32_t>(shaderMeshDataBuffers.size())}
     };
     VkDescriptorPoolCreateInfo descriptorPoolCI{};
     descriptorPoolCI.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     descriptorPoolCI.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     descriptorPoolCI.pPoolSizes = poolSizes.data();
-    descriptorPoolCI.maxSets = (2 + materialCount + meshCount) * swapChain.imageCount;
+    descriptorPoolCI.maxSets = (2 + materialCount + meshCount + 1) * swapChain.imageCount;
     VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolCI, nullptr, &descriptorPool));
 
     backgroundRes.needsRecreate = true;
@@ -1939,6 +2216,7 @@ void VulkanApplication::updateParams()
 void VulkanApplication::windowResized()
 {
     vkDeviceWaitIdle(device);
+    updateViewports();
     updateUniformData();
     updateOverlay();
 }
@@ -1988,11 +2266,14 @@ void VulkanApplication::prepare()
         VK_CHECK_RESULT(vkAllocateCommandBuffers(device, &cmdBufAllocateInfo, commandBuffers.data()));
     }
 
+    createFullscreenQuad();
+    updateViewports();
     loadAssets();
     generateBRDFLUT();
     prepareUniformBuffers();
     setupDescriptors();
     preparePipelines();
+    createUIResources();
 
     ui = new UI(vulkanDevice, renderPass, queue, pipelineCache, settings.sampleCount);
     updateOverlay();
@@ -2005,10 +2286,17 @@ void VulkanApplication::updateOverlay()
     ImGuiIO& io = ImGui::GetIO();
 
     ImVec2 lastDisplaySize = io.DisplaySize;
-    io.DisplaySize = ImVec2((float)width, (float)height);
+    io.DisplaySize = ImVec2((float)uiViewport.width, (float)uiViewport.height);
     io.DeltaTime = frameTimer;
 
-    io.MousePos = ImVec2(mousePos.x, mousePos.y);
+    // Преобразуем координаты мыши в координаты UI viewport'а
+    if (mousePos.x >= uiViewport.x && mousePos.x <= uiViewport.x + uiViewport.width &&
+        mousePos.y >= uiViewport.y && mousePos.y <= uiViewport.y + uiViewport.height) {
+        io.MousePos = ImVec2(mousePos.x - uiViewport.x, mousePos.y - uiViewport.y);
+    } else {
+        io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+    }
+
     io.MouseDown[0] = mouseButtons.left;
     io.MouseDown[1] = mouseButtons.right;
 
@@ -2023,7 +2311,7 @@ void VulkanApplication::updateOverlay()
     ImGui::NewFrame();
 
     ImGui::SetNextWindowPos(ImVec2(10, 10));
-    ImGui::SetNextWindowSize(ImVec2(200 * scale, (models.scene.animations.size() > 0 ? 500 : 420) * scale), ImGuiSetCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(uiViewport.width - 20, uiViewport.height - 20), ImGuiSetCond_Always);
     ImGui::Begin("Vulkan glTF 2.0 PBR", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
     ImGui::PushItemWidth(100.0f * scale);
 
@@ -2113,14 +2401,13 @@ void VulkanApplication::updateOverlay()
             if (!filename.empty()) {
                 vkDeviceWaitIdle(device);
                 loadBackground(filename);
-                // Пересоздаем ресурсы фона при новой текстуре
                 destroyBackgroundResources();
             }
         }
     }
 
     if (ui->header("Environment")) {
-        ui->checkbox("Show skybox", &displayBackground); // Переименовали для ясности
+        ui->checkbox("Show skybox", &displayBackground);
         ui->slider("Exposure", &shaderValuesParams.exposure, 0.1f, 10.0f);
         ui->slider("Gamma", &shaderValuesParams.gamma, 0.1f, 4.0f);
         ui->slider("IBL", &shaderValuesParams.scaleIBLAmbient, 0.0f, 1.0f);
@@ -2231,7 +2518,6 @@ void VulkanApplication::render()
         VK_CHECK_RESULT(acquire);
     }
 
-    // Записываем команды в command buffer
     recordCommandBuffer();
 
     updateUniformData();

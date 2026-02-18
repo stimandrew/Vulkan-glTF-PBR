@@ -4,5 +4,7 @@ build/
 # Игнорировать файл CMakeLists.txt.user
 CMakeLists.txt.user
 
+CMakeLists.txt.*
+
 
 tree.txt
