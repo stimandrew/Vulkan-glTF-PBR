@@ -141,12 +141,17 @@ bool Screenshot::isComplete() {
 
     VkResult result = vkGetFenceStatus(device->logicalDevice, context.fence);
     if (result == VK_SUCCESS) {
-        // Копируем данные из буфера
         void* mappedData;
         VK_CHECK_RESULT(vkMapMemory(device->logicalDevice, context.memory, 0,
                                     VK_WHOLE_SIZE, 0, &mappedData));
         memcpy(context.pixels.data(), mappedData, context.pixels.size());
         vkUnmapMemory(device->logicalDevice, context.memory);
+
+        // Добавьте преобразование BGR -> RGB
+        for (size_t i = 0; i < context.pixels.size(); i += 4) {
+            std::swap(context.pixels[i], context.pixels[i + 2]); // swap R и B каналы
+        }
+
         return true;
     }
     return false;
