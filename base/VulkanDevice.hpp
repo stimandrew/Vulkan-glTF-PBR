@@ -15,6 +15,9 @@
 #include <algorithm>
 #include <cstring>
 #include <vector>
+#include <iostream>  // Добавлено
+#include <string>    // Добавлено
+#include <stdexcept> // Добавлено для std::runtime_error
 #include "vulkan/vulkan.h"
 
 #if defined(VK_USE_PLATFORM_MACOS_MVK) && (VK_HEADER_VERSION >= 216)

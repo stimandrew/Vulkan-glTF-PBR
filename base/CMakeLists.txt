@@ -1,4 +1,3 @@
-# В base/CMakeLists.txt добавьте stb_image.cpp
 file(GLOB BASE_SRC "*.cpp" "../external/imgui/*.cpp" "../external/stb_image/stb_image.cpp")
 file(GLOB BASE_HEADERS "*.hpp" "*.h" "../external/stb_image/*.h")
 
@@ -16,6 +15,9 @@ target_include_directories(base PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../external
     ${CMAKE_CURRENT_SOURCE_DIR}/../external/stb_image
 )
+
+# Добавляем определение для stb_image_write
+target_compile_definitions(base PRIVATE STB_IMAGE_WRITE_IMPLEMENTATION)
 
 if(WIN32)
     target_link_libraries(base ${Vulkan_LIBRARY} ${WINLIBS} ${DRACO_DECODER_LIBRARY})

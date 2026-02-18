@@ -489,7 +489,7 @@ public:
         VkImageCreateInfo imageCreateInfo{};
         imageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
-        imageCreateInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
+        imageCreateInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
         imageCreateInfo.mipLevels = mipLevels;
         imageCreateInfo.arrayLayers = 1;
         imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;

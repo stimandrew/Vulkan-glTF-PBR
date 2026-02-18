@@ -1,4 +1,6 @@
 #include "vulkanapplication.h"
+#include <iomanip>  // Добавьте эту строку для std::put_time
+#include <ctime>    // Для std::localtime
 
 // Constructor
 VulkanApplication::VulkanApplication() : VulkanExampleBase()
@@ -51,6 +53,162 @@ VulkanApplication::~VulkanApplication()
     textures.empty.destroy();
 
     delete ui;
+
+    delete screenshot;
+}
+
+glm::vec4 VulkanApplication::calculateBackgroundDisplayRect()
+{
+    if (!useStaticBackground || !textures.background.image) {
+        return glm::vec4(0, 0, sceneViewport.width, sceneViewport.height);
+    }
+
+    float viewportWidth = static_cast<float>(sceneViewport.width);
+    float viewportHeight = static_cast<float>(sceneViewport.height);
+    float imageWidth = static_cast<float>(textures.background.width);
+    float imageHeight = static_cast<float>(textures.background.height);
+
+    // Рассчитываем коэффициент масштабирования для сохранения пропорций
+    float viewportAspect = viewportWidth / viewportHeight;
+    float imageAspect = imageWidth / imageHeight;
+
+    float displayWidth, displayHeight;
+    float offsetX = 0, offsetY = 0;
+
+    if (viewportAspect > imageAspect) {
+        // Вьюпорт шире, чем изображение - изображение масштабируется по высоте
+        displayHeight = viewportHeight;
+        displayWidth = imageAspect * viewportHeight;
+        offsetX = (viewportWidth - displayWidth) / 2.0f;
+    } else {
+        // Вьюпорт уже, чем изображение - изображение масштабируется по ширине
+        displayWidth = viewportWidth;
+        displayHeight = viewportWidth / imageAspect;
+        offsetY = (viewportHeight - displayHeight) / 2.0f;
+    }
+
+    // Округляем до целых пикселей
+    uint32_t finalX = static_cast<uint32_t>(std::round(offsetX));
+    uint32_t finalY = static_cast<uint32_t>(std::round(offsetY));
+    uint32_t finalWidth = static_cast<uint32_t>(std::round(displayWidth));
+    uint32_t finalHeight = static_cast<uint32_t>(std::round(displayHeight));
+
+    // Убеждаемся, что область не выходит за пределы вьюпорта
+    finalWidth = std::min(finalWidth, sceneViewport.width);
+    finalHeight = std::min(finalHeight, sceneViewport.height);
+
+    if (finalX + finalWidth > sceneViewport.width) {
+        finalWidth = sceneViewport.width - finalX;
+    }
+    if (finalY + finalHeight > sceneViewport.height) {
+        finalHeight = sceneViewport.height - finalY;
+    }
+
+    std::cout << "Background display rect: x=" << finalX << ", y=" << finalY
+              << ", w=" << finalWidth << ", h=" << finalHeight << std::endl;
+
+    return glm::vec4(finalX, finalY, finalWidth, finalHeight);
+}
+
+std::string VulkanApplication::generateScreenshotFilename()
+{
+    auto now = std::chrono::system_clock::now();
+    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+
+    std::stringstream ss;
+    ss << "screenshot_";
+    ss << std::put_time(std::localtime(&in_time_t), "%Y%m%d_%H%M%S");
+
+    return ss.str();
+}
+
+void VulkanApplication::takeScreenshot()
+{
+    if (!prepared || !screenshot) {
+        std::cerr << "Cannot take screenshot - not ready!" << std::endl;
+        return;
+    }
+
+    // Приостанавливаем рендеринг на время захвата
+    vkDeviceWaitIdle(device);
+
+    // Получаем текущее изображение из swap chain
+    VkImage srcImage = swapChain.images[imageIndex];
+
+    if (useStaticBackground && textures.background.image) {
+        // Если фон включен, захватываем только область, где отображается фон
+        glm::vec4 displayRect = calculateBackgroundDisplayRect();
+
+        uint32_t captureX = static_cast<uint32_t>(displayRect.x);
+        uint32_t captureY = static_cast<uint32_t>(displayRect.y);
+        uint32_t captureWidth = static_cast<uint32_t>(displayRect.z);
+        uint32_t captureHeight = static_cast<uint32_t>(displayRect.w);
+
+        // Проверяем, что область корректа
+        if (captureWidth == 0 || captureHeight == 0) {
+            std::cerr << "Invalid capture area!" << std::endl;
+            return;
+        }
+
+        std::cout << "Capturing background area: " << captureWidth << "x" << captureHeight
+                  << " at position (" << captureX << "," << captureY << ")" << std::endl;
+
+        // TODO: Для точного захвата области нужно использовать VkImageBlit
+        // Пока просто захватываем весь вьюпорт и будем обрезать позже
+        if (screenshot->capture(srcImage, sceneViewport.width, sceneViewport.height, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)) {
+            std::cout << "Screenshot capture started..." << std::endl;
+
+            // Ждем завершения захвата
+            while (!screenshot->isComplete()) {
+                vkDeviceWaitIdle(device);
+            }
+
+            // Получаем пиксели
+            std::vector<uint8_t> fullPixels = screenshot->getPixels();
+
+            // Вырезаем область фона
+            std::vector<uint8_t> croppedPixels;
+            croppedPixels.resize(captureWidth * captureHeight * 4);
+
+            for (uint32_t y = 0; y < captureHeight; y++) {
+                uint32_t srcY = captureY + y;
+                uint32_t dstY = y;
+
+                memcpy(
+                    croppedPixels.data() + (dstY * captureWidth * 4),
+                    fullPixels.data() + ((srcY * sceneViewport.width + captureX) * 4),
+                    captureWidth * 4
+                    );
+            }
+
+            // Создаем временный screenshot объект с обрезанными данными
+            Screenshot croppedScreenshot(vulkanDevice, queue, cmdPool);
+            // Сохраняем обрезанное изображение
+            std::string filename = generateScreenshotFilename() + "_background";
+            std::string pngFilename = filename + ".png";
+            stbi_write_png(pngFilename.c_str(), captureWidth, captureHeight, 4,
+                           croppedPixels.data(), captureWidth * 4);
+
+            std::cout << "Background screenshot saved to " << pngFilename
+                      << " (original: " << sceneViewport.width << "x" << sceneViewport.height
+                      << ", cropped: " << captureWidth << "x" << captureHeight << ")" << std::endl;
+        }
+    } else {
+        // Если фона нет, захватываем всю сцену
+        if (screenshot->capture(srcImage, sceneViewport.width, sceneViewport.height, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)) {
+            std::cout << "Screenshot capture started..." << std::endl;
+
+            while (!screenshot->isComplete()) {
+                vkDeviceWaitIdle(device);
+            }
+
+            std::string filename = generateScreenshotFilename();
+            screenshot->saveToFile(filename);
+
+            std::cout << "Scene screenshot saved: " << filename << ".png ("
+                      << sceneViewport.width << "x" << sceneViewport.height << ")" << std::endl;
+        }
+    }
 }
 
 void VulkanApplication::createFullscreenQuad()
@@ -2288,6 +2446,8 @@ void VulkanApplication::prepare()
     ui = new UI(vulkanDevice, renderPass, queue, pipelineCache, settings.sampleCount);
     updateOverlay();
 
+    screenshot = new Screenshot(vulkanDevice, queue, cmdPool);
+
     prepared = true;
 }
 
@@ -2431,6 +2591,22 @@ void VulkanApplication::updateOverlay()
                 loadBackground(filename);
                 destroyBackgroundResources();
             }
+        }
+
+        // Добавляем новую кнопку для скриншота
+        if (ui->button("Take Screenshot")) {
+            takeScreenshot();
+        }
+
+        if (useStaticBackground && textures.background.image) {
+            glm::vec4 displayRect = calculateBackgroundDisplayRect();
+            ui->text("Background display size: %d x %d",
+                     static_cast<int>(displayRect.z), static_cast<int>(displayRect.w));
+            ui->text("Screenshot will be: %d x %d",
+                     static_cast<int>(displayRect.z), static_cast<int>(displayRect.w));
+        } else {
+            ui->text("Screenshot size: %d x %d",
+                     sceneViewport.width, sceneViewport.height);
         }
     }
 

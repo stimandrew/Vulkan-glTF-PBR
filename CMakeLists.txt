@@ -74,6 +74,7 @@ ELSEIF(LINUX)
                 message("Using XCB extension...")
                 find_package(XCB REQUIRED)
                 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DVK_USE_PLATFORM_XCB_KHR")
+                include_directories(${XCB_INCLUDE_DIR})
         ENDIF(USE_D2D_WSI)
 ELSEIF(APPLE)
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DVK_USE_PLATFORM_MACOS_MVK -DVK_EXAMPLE_XCODE_GENERATED")
@@ -120,12 +121,6 @@ file(MAKE_DIRECTORY ${SHADER_BINARY_DIR})
 # Функция для компиляции шейдера
 function(compile_shader SHADER_PATH)
     get_filename_component(SHADER_FULL_NAME ${SHADER_PATH} NAME)
-    get_filename_component(SHADER_NAME ${SHADER_PATH} NAME_WE)
-    get_filename_component(SHADER_EXT ${SHADER_PATH} LAST_EXT)
-
-    # Убираем точку из расширения
-    string(REGEX REPLACE "^\\." "" SHADER_EXT ${SHADER_EXT})
-
     set(OUTPUT_FILE ${SHADER_BINARY_DIR}/${SHADER_FULL_NAME}.spv)
     set(FINAL_OUTPUT ${SHADER_SOURCE_DIR}/${SHADER_FULL_NAME}.spv)
 
@@ -164,8 +159,8 @@ if(NOT SKIP_SHADER_COMPILATION)
         "${SHADER_SOURCE_DIR}/*.rgen"
         "${SHADER_SOURCE_DIR}/*.rchit"
         "${SHADER_SOURCE_DIR}/*.rmiss"
-        "${SHADER_SOURCE_DIR}/ui_background.vert"  # Добавлено
-        "${SHADER_SOURCE_DIR}/ui_background.frag"  # Добавлено
+        "${SHADER_SOURCE_DIR}/ui_background.vert"
+        "${SHADER_SOURCE_DIR}/ui_background.frag"
     )
 
     # Компилируем все найденные шейдеры
@@ -180,7 +175,7 @@ if(NOT SKIP_SHADER_COMPILATION)
     endif()
 endif()
 
-# Определяем путь для копирования данных - ИСПРАВЛЕНО для Desktop-Debug
+# Определяем путь для копирования данных
 set(DATA_OUTPUT_DIR "${CMAKE_BINARY_DIR}")
 
 # Создаем директорию для данных и копируем
@@ -203,8 +198,7 @@ message(STATUS "Data will be copied to: ${DATA_OUTPUT_DIR}/data")
 
 # ===== КОНЕЦ: Добавление компиляции шейдеров и копирования данных =====
 
-file(GLOB SOURCE *.cpp )
-
+# Не дублируем SOURCE здесь, так как будем использовать из поддиректорий
 if(RESOURCE_INSTALL_DIR)
         add_definitions(-DVK_EXAMPLE_DATA_DIR=\"${RESOURCE_INSTALL_DIR}/\")
         install(DIRECTORY data/ DESTINATION ${RESOURCE_INSTALL_DIR}/)
@@ -228,7 +222,7 @@ IF(WIN32)
 ELSEIF(APPLE)
         link_libraries(${Vulkan_LIBRARY} "-framework AppKit" "-framework QuartzCore")
 ELSE(WIN32)
-        link_libraries(${XCB_LIBRARIES} ${Vulkan_LIBRARY} ${Vulkan_LIBRARY} ${WAYLAND_CLIENT_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
+        link_libraries(${XCB_LIBRARIES} ${Vulkan_LIBRARY} ${WAYLAND_CLIENT_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
 ENDIF(WIN32)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/")

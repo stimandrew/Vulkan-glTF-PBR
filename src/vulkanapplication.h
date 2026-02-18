@@ -17,6 +17,7 @@
 #include "VulkanglTFModel.h"
 #include "VulkanUtils.hpp"
 #include "ui.hpp"
+#include "screenshot.h"
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -42,6 +43,10 @@ private:
     void destroyBackgroundResources();
 
 public:
+    glm::vec4 calculateBackgroundDisplayRect();
+    Screenshot* screenshot = nullptr;
+    void takeScreenshot();
+    std::string generateScreenshotFilename();
 
     struct BackgroundPushConstants {
         glm::vec2 viewportSize;
