@@ -48,7 +48,7 @@ public:
         glm::vec2 imageSize;
         glm::vec2 offset;
     } backgroundPushConstants;
-
+    glm::vec3 modelPosition = glm::vec3(0.0f);
     bool useStaticBackground = false;
     std::string backgroundFile;
 

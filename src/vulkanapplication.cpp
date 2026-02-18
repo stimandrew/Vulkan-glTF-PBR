@@ -394,6 +394,9 @@ void VulkanApplication::resetCamera()
     camera.setPosition({ 0.0f, 0.0f, 1.0f });
     camera.setRotation({ 0.0f, 0.0f, 0.0f });
     camera.updateViewMatrix();
+
+    // Сбрасываем позицию модели
+    modelPosition = glm::vec3(0.0f);
 }
 
 void VulkanApplication::renderNode(vkglTF::Node *node, uint32_t cbIndex, vkglTF::Material::AlphaMode alphaMode)
@@ -933,6 +936,9 @@ void VulkanApplication::loadScene(std::string filename)
 
     animationIndex = 0;
     animationTimer = 0.0f;
+
+    // Сбрасываем позицию модели при загрузке новой сцены
+    modelPosition = glm::vec3(0.0f);
 
     auto tStart = std::chrono::high_resolution_clock::now();
     models.scene.loadFromFile(filename, vulkanDevice, queue);
@@ -2190,11 +2196,15 @@ void VulkanApplication::updateUniformData()
     glm::vec3 translate = -glm::vec3(models.scene.aabb[3][0], models.scene.aabb[3][1], models.scene.aabb[3][2]);
     translate += -0.5f * glm::vec3(models.scene.aabb[0][0], models.scene.aabb[1][1], models.scene.aabb[2][2]);
 
+    // Применяем позицию модели из слайдеров
     shaderValuesScene.model = glm::mat4(1.0f);
     shaderValuesScene.model[0][0] = scale;
     shaderValuesScene.model[1][1] = scale;
     shaderValuesScene.model[2][2] = scale;
+
+    // Сначала перемещаем в центр, затем применяем позицию из слайдеров
     shaderValuesScene.model = glm::translate(shaderValuesScene.model, translate);
+    shaderValuesScene.model = glm::translate(shaderValuesScene.model, modelPosition);
 
     glm::mat4 cv = glm::inverse(camera.matrices.view);
     shaderValuesScene.camPos = glm::vec3(cv[3]);
@@ -2366,6 +2376,24 @@ void VulkanApplication::updateOverlay()
             vkDeviceWaitIdle(device);
             loadEnvironment(environments[selectedEnvironment]);
             setupDescriptors();
+        }
+
+        // Добавляем слайдеры для перемещения модели
+        ui->text("Model Position:");
+        if (ui->slider("X Position", &modelPosition.x, -1800.0f, 1800.0f)) {
+            updateUniformData(); // Обновляем uniform данные при изменении
+        }
+        if (ui->slider("Y Position", &modelPosition.y, -1200.0f, 1200.0f)) {
+            updateUniformData();
+        }
+        if (ui->slider("Z Position", &modelPosition.z, -2000.0f, 200.0f)) {
+            updateUniformData();
+        }
+
+        // Добавляем кнопку для сброса позиции
+        if (ui->button("Reset Position")) {
+            modelPosition = glm::vec3(0.0f);
+            updateUniformData();
         }
     }
 
