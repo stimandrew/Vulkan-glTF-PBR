@@ -54,6 +54,13 @@ public:
         float left, right, top, bottom;
     } selectionRect;
 
+    struct YOLOData {
+        std::string className = "object";  // Имя класса по умолчанию
+        int classId = 0;                    // ID класса по умолчанию
+        bool saveForYOLO = true;           // Сохранять ли в формате YOLO
+    } yoloData;
+
+    void saveYOLOAnnotation(const std::string& filename);
     std::string getNextScreenshotFilename();
     int getNextScreenshotNumber();
     void saveModelCoordinatesToFile(const std::string& filename, const glm::vec3& modelPos);

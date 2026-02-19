@@ -62,6 +62,97 @@ VulkanApplication::~VulkanApplication()
     delete screenshot;
 }
 
+void VulkanApplication::saveYOLOAnnotation(const std::string& filename)
+{
+    if (!yoloData.saveForYOLO) {
+        return; // Не сохраняем, если выключено
+    }
+
+    if (!showSelectionRect || selectionRect.left == 0 && selectionRect.right == 0) {
+        std::cout << "Selection rect not visible, skipping YOLO annotation" << std::endl;
+        return;
+    }
+
+    // Создаем имя файла для YOLO аннотации
+    std::string txtFilename = filename + ".txt";
+
+    // Получаем размеры рамки в пикселях
+    float boxWidth = selectionRect.right - selectionRect.left;
+    float boxHeight = selectionRect.bottom - selectionRect.top;
+
+    // Проверяем, что рамка имеет корректные размеры
+    if (boxWidth < 1.0f || boxHeight < 1.0f) {
+        std::cerr << "Invalid bounding box dimensions!" << std::endl;
+        return;
+    }
+
+    // YOLO формат: <class_id> <x_center> <y_center> <width> <height>
+    // Все координаты нормализованы относительно размеров изображения
+
+    // Центр bounding box в пикселях
+    float centerX = selectionRect.left + boxWidth / 2.0f;
+    float centerY = selectionRect.top + boxHeight / 2.0f;
+
+    // Нормализуем координаты (от 0 до 1)
+    float normCenterX = centerX / sceneViewport.width;
+    float normCenterY = centerY / sceneViewport.height;
+    float normWidth = boxWidth / sceneViewport.width;
+    float normHeight = boxHeight / sceneViewport.height;
+
+    // Ограничиваем значения от 0 до 1
+    normCenterX = std::max(0.0f, std::min(1.0f, normCenterX));
+    normCenterY = std::max(0.0f, std::min(1.0f, normCenterY));
+    normWidth = std::max(0.0f, std::min(1.0f, normWidth));
+    normHeight = std::max(0.0f, std::min(1.0f, normHeight));
+
+    // Сохраняем в файл
+    std::ofstream yoloFile(txtFilename);
+
+    if (!yoloFile.is_open()) {
+        std::cerr << "Failed to create YOLO annotation file: " << txtFilename << std::endl;
+        return;
+    }
+
+    // Записываем в формате: class_id x_center y_center width height
+    // Используем class_id из настроек
+    yoloFile << yoloData.classId << " "
+             << std::fixed << std::setprecision(6) << normCenterX << " "
+             << std::fixed << std::setprecision(6) << normCenterY << " "
+             << std::fixed << std::setprecision(6) << normWidth << " "
+             << std::fixed << std::setprecision(6) << normHeight << std::endl;
+
+    yoloFile.close();
+
+    // Также создаем файл с именами классов (для справки)
+    std::ofstream classesFile("classes.txt", std::ios::app);
+    if (classesFile.is_open()) {
+        // Записываем имя класса и его ID, если его еще нет в файле
+        std::string line;
+        std::ifstream checkFile("classes.txt");
+        bool classExists = false;
+        std::string classEntry = std::to_string(yoloData.classId) + " " + yoloData.className;
+
+        while (std::getline(checkFile, line)) {
+            if (line == classEntry) {
+                classExists = true;
+                break;
+            }
+        }
+        checkFile.close();
+
+        if (!classExists) {
+            classesFile << classEntry << std::endl;
+        }
+        classesFile.close();
+    }
+
+    std::cout << "YOLO annotation saved to " << txtFilename << std::endl;
+    std::cout << "  Class ID: " << yoloData.classId << " (" << yoloData.className << ")" << std::endl;
+    std::cout << "  Bounding box: [" << normCenterX << ", " << normCenterY
+              << ", " << normWidth << ", " << normHeight << "]" << std::endl;
+}
+
+
 void VulkanApplication::createSelectionRectResources() {
     if (selectionRect.initialized) return;
 
@@ -630,6 +721,11 @@ void VulkanApplication::takeScreenshot()
             // Сохраняем координаты модели в отдельный файл
             saveModelCoordinatesToFile(filename, modelCoords);
 
+            // Сохраняем YOLO аннотацию
+            if (yoloData.saveForYOLO) {
+                saveYOLOAnnotation(filename);
+            }
+
             std::cout << "Background screenshot saved to " << pngFilename
                       << " (original: " << sceneViewport.width << "x" << sceneViewport.height
                       << ", cropped: " << captureWidth << "x" << captureHeight << ")" << std::endl;
@@ -651,12 +747,14 @@ void VulkanApplication::takeScreenshot()
             // Сохраняем координаты модели в отдельный файл
             saveModelCoordinatesToFile(filename, modelCoords);
 
+            // Сохраняем YOLO аннотацию
+            saveYOLOAnnotation(filename);
+
             std::cout << "Scene screenshot saved: " << pngFilename << " ("
                       << sceneViewport.width << "x" << sceneViewport.height << ")" << std::endl;
         }
     }
 }
-
 
 
 void VulkanApplication::createFullscreenQuad()
@@ -3032,7 +3130,62 @@ void VulkanApplication::updateOverlay()
             updateUniformData();
         }
 
+        if (ui->button("Reset Camera")) {
+            resetCamera();
+        }
+
         ui->checkbox("Show selection rect", &showSelectionRect);
+    }
+
+    if (ui->header("YOLO")) {
+        ui->checkbox("Save YOLO annotations", &yoloData.saveForYOLO);
+
+        // Поле для ввода ID класса
+        ImGui::Text("Class ID:");
+        ImGui::SameLine();
+        if (ImGui::InputInt("##classid", &yoloData.classId, 1, 10)) {
+            // Ограничиваем ID от 0 до 999
+            if (yoloData.classId < 0) yoloData.classId = 0;
+            if (yoloData.classId > 999) yoloData.classId = 999;
+        }
+
+        // Поле для ввода имени класса - ИСПРАВЛЕНО: используем InputText вместо Text
+        static char classNameBuffer[256];
+        strncpy(classNameBuffer, yoloData.className.c_str(), sizeof(classNameBuffer));
+        classNameBuffer[sizeof(classNameBuffer) - 1] = '\0';
+
+        ImGui::Text("Class name:");
+        ImGui::SameLine();
+        if (ImGui::InputText("##classname_input", classNameBuffer, sizeof(classNameBuffer))) {
+            yoloData.className = classNameBuffer;
+        }
+
+        // Отображение информации о текущей рамке
+        if (showSelectionRect && selectionRect.left != 0 && selectionRect.right != 0) {
+            float width = selectionRect.right - selectionRect.left;
+            float height = selectionRect.bottom - selectionRect.top;
+
+            ui->text("Bounding box size: %.1f x %.1f px", width, height);
+
+            // YOLO нормализованные координаты
+            float normCenterX = (selectionRect.left + width/2.0f) / sceneViewport.width;
+            float normCenterY = (selectionRect.top + height/2.0f) / sceneViewport.height;
+            float normWidth = width / sceneViewport.width;
+            float normHeight = height / sceneViewport.height;
+
+            ui->text("YOLO format:");
+            ui->text("  ID %d: %s", yoloData.classId, yoloData.className.c_str());
+            ui->text("  center: %.3f, %.3f", normCenterX, normCenterY);
+            ui->text("  size: %.3f, %.3f", normWidth, normHeight);
+        } else {
+            ui->text("No bounding box visible");
+        }
+
+        // Информация о следующем файле
+        int nextNum = getNextScreenshotNumber();
+        ui->text("Next files:");
+        ui->text("  frame_%02d.png", nextNum);
+        ui->text("  frame_%02d.txt (YOLO)", nextNum);
     }
 
     if (ui->header("Background")) {
@@ -3100,6 +3253,11 @@ void VulkanApplication::updateOverlay()
         int32_t cameraTypeSelection = (int32_t)camera.type;
         if (ui->combo("Type", &cameraTypeSelection, cameraTypes)) {
             camera.type = (Camera::CameraType)cameraTypeSelection;
+            resetCamera();
+        }
+
+        // Добавляем кнопку сброса камеры
+        if (ui->button("Reset Camera Position")) {
             resetCamera();
         }
     }
@@ -3171,6 +3329,8 @@ void VulkanApplication::updateOverlay()
     }
 
 #if defined(VK_USE_PLATFORM_ANDROID_KHR)
+
+
     if (mouseButtons.left) {
         mouseButtons.left = false;
     }
