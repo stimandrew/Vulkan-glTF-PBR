@@ -3244,7 +3244,6 @@ void VulkanApplication::updateOverlay()
         if (ui->button("Random Position/Rotation")) {
             randomizeModelPositionAndRotation();
         }
-        ImGui::SameLine();
         if (ui->button("Random Position Only")) {
             srand(static_cast<unsigned int>(time(nullptr)));
             modelPosition = getRandomVisiblePosition();
@@ -3252,7 +3251,6 @@ void VulkanApplication::updateOverlay()
             std::cout << "Random position: (" << modelPosition.x << ", "
                       << modelPosition.y << ", " << modelPosition.z << ")" << std::endl;
         }
-        ImGui::SameLine();
         if (ui->button("Random Rotation Only")) {
             srand(static_cast<unsigned int>(time(nullptr)));
             modelRotation = getRandomRotation();
@@ -3260,7 +3258,7 @@ void VulkanApplication::updateOverlay()
             std::cout << "Random rotation: (" << modelRotation.x << "°, "
                       << modelRotation.y << "°, " << modelRotation.z << "°)" << std::endl;
         }
-
+        ImGui::Separator();
         if (ui->button("Reset Camera")) {
             resetCamera();
         }
