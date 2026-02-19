@@ -54,18 +54,18 @@ public:
         float left, right, top, bottom;
     } selectionRect;
 
+    std::string getNextScreenshotFilename();
+    int getNextScreenshotNumber();
+    void saveModelCoordinatesToFile(const std::string& filename, const glm::vec3& modelPos);
     bool showSelectionRect = true;
     void createSelectionRectResources();
     void destroySelectionRectResources();
     void updateSelectionRect(const glm::vec3& modelPos, const glm::mat4& viewProj);
     void renderSelectionRect(VkCommandBuffer commandBuffer);
 
-    void saveModelCoordinates(const std::string& filename, const glm::vec3& modelPos);
     glm::vec3 getModelCoordinatesRelativeToScreen();
     glm::vec3 modelRotation = glm::vec3(0.0f);
 
-    // Константа для файла с координатами
-    static constexpr const char* COORDINATES_FILE = "coordinate.txt";
     glm::vec4 calculateBackgroundDisplayRect();
     Screenshot* screenshot = nullptr;
     void takeScreenshot();

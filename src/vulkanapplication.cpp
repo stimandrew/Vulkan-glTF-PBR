@@ -507,16 +507,55 @@ glm::vec4 VulkanApplication::calculateBackgroundDisplayRect()
     return glm::vec4(finalX, finalY, finalWidth, finalHeight);
 }
 
+int VulkanApplication::getNextScreenshotNumber()
+{
+    int maxNumber = 0;
+
+    // Проверяем существующие файлы в текущей директории
+    for (int i = 1; i <= 999; i++) { // Ограничим до 999 для производительности
+        std::stringstream ss;
+        ss << "frame_" << std::setw(2) << std::setfill('0') << i << ".png";
+
+        std::ifstream file(ss.str());
+        if (file.good()) {
+            maxNumber = i;
+        } else {
+            break; // Как только нашли первый отсутствующий файл, останавливаемся
+        }
+    }
+
+    return maxNumber + 1;
+}
+
 std::string VulkanApplication::generateScreenshotFilename()
 {
-    auto now = std::chrono::system_clock::now();
-    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+    int nextNumber = getNextScreenshotNumber();
 
     std::stringstream ss;
-    ss << "screenshot_";
-    ss << std::put_time(std::localtime(&in_time_t), "%Y%m%d_%H%M%S");
+    ss << "frame_" << std::setw(2) << std::setfill('0') << nextNumber;
 
     return ss.str();
+}
+
+void VulkanApplication::saveModelCoordinatesToFile(const std::string& filename, const glm::vec3& modelPos)
+{
+    // Создаем имя файла на основе имени скриншота
+    std::string txtFilename = filename + ".txt";
+
+    std::ofstream coordFile(txtFilename);
+
+    if (!coordFile.is_open()) {
+        std::cerr << "Failed to create coordinates file: " << txtFilename << std::endl;
+        return;
+    }
+
+    // Сохраняем координаты в формате: X Y Z (по одной координате на строку для удобства чтения)
+    coordFile << std::fixed << std::setprecision(6) << modelPos.x << std::endl;
+    coordFile << std::fixed << std::setprecision(6) << modelPos.y << std::endl;
+    coordFile << std::fixed << std::setprecision(6) << modelPos.z << std::endl;
+
+    coordFile.close();
+    std::cout << "Model coordinates saved to " << txtFilename << std::endl;
 }
 
 void VulkanApplication::takeScreenshot()
@@ -580,9 +619,6 @@ void VulkanApplication::takeScreenshot()
                     );
             }
 
-            // Создаем временный screenshot объект с обрезанными данными
-            Screenshot croppedScreenshot(vulkanDevice, queue, cmdPool);
-
             // Генерируем имя файла
             std::string filename = generateScreenshotFilename() + "_background";
             std::string pngFilename = filename + ".png";
@@ -591,8 +627,8 @@ void VulkanApplication::takeScreenshot()
             stbi_write_png(pngFilename.c_str(), captureWidth, captureHeight, 4,
                            croppedPixels.data(), captureWidth * 4);
 
-            // Сохраняем координаты модели
-            saveModelCoordinates(filename, modelCoords);
+            // Сохраняем координаты модели в отдельный файл
+            saveModelCoordinatesToFile(filename, modelCoords);
 
             std::cout << "Background screenshot saved to " << pngFilename
                       << " (original: " << sceneViewport.width << "x" << sceneViewport.height
@@ -612,14 +648,16 @@ void VulkanApplication::takeScreenshot()
 
             screenshot->saveToFile(filename); // saveToFile уже добавляет .png
 
-            // Сохраняем координаты модели
-            saveModelCoordinates(filename, modelCoords);
+            // Сохраняем координаты модели в отдельный файл
+            saveModelCoordinatesToFile(filename, modelCoords);
 
             std::cout << "Scene screenshot saved: " << pngFilename << " ("
                       << sceneViewport.width << "x" << sceneViewport.height << ")" << std::endl;
         }
     }
 }
+
+
 
 void VulkanApplication::createFullscreenQuad()
 {
@@ -3219,25 +3257,6 @@ glm::vec3 VulkanApplication::getModelCoordinatesRelativeToScreen()
     // Если используем фон с обрезкой, координаты остаются абсолютными
     // так как модель все еще рендерится в той же системе координат
     return absolutePos;
-}
-
-void VulkanApplication::saveModelCoordinates(const std::string& filename, const glm::vec3& modelPos)
-{
-    std::ofstream coordFile(COORDINATES_FILE, std::ios::app); // Открываем в режиме добавления
-
-    if (!coordFile.is_open()) {
-        std::cerr << "Failed to open coordinates file: " << COORDINATES_FILE << std::endl;
-        return;
-    }
-
-    // Форматируем строку: <имя png файла> - <координаты 3д модели относительно центра скриншота>
-    coordFile << filename << ".png - "
-              << std::fixed << std::setprecision(3)
-              << "(" << modelPos.x << ", " << modelPos.y << ", " << modelPos.z << ")"
-              << std::endl;
-
-    coordFile.close();
-    std::cout << "Model coordinates saved to " << COORDINATES_FILE << std::endl;
 }
 
 void VulkanApplication::fileDropped(std::string filename)
