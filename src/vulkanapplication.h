@@ -60,6 +60,17 @@ public:
         bool saveForYOLO = true;           // Сохранять ли в формате YOLO
     } yoloData;
 
+    // Структура для управления датасетом YOLO
+    struct YOLODataset {
+        std::string datasetPath = "yolo_dataset";  // Основная папка датасета
+        bool useDatasetStructure = true;            // Использовать ли структуру папок
+    } yoloDataset;
+
+    void createYOLODatasetStructure();              // Создание структуры папок
+    std::string getYOLOImagePath(const std::string& baseFilename);   // Получить путь для изображения
+    std::string getYOLOLabelPath(const std::string& baseFilename);   // Получить путь для лейбла
+    void ensureDirectoryExists(const std::string& path);             // Проверка/создание папки
+
     void saveYOLOAnnotation(const std::string& filename);
     std::string getNextScreenshotFilename();
     int getNextScreenshotNumber();

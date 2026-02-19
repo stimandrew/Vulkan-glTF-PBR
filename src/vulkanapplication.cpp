@@ -10,6 +10,10 @@ VulkanApplication::VulkanApplication() : VulkanExampleBase()
 {
     title = "Vulkan glTF 2.0 PBR - (C) Sascha Willems (www.saschawillems.de)";
     selectionRect.initialized = false;
+
+    // Инициализация YOLO структуры
+    yoloDataset.datasetPath = "yolo_dataset";
+    yoloDataset.useDatasetStructure = true;
 #if defined(TINYGLTF_ENABLE_DRACO)
     std::cout << "Draco mesh compression is enabled" << std::endl;
 #endif
@@ -62,88 +66,160 @@ VulkanApplication::~VulkanApplication()
     delete screenshot;
 }
 
+
+// Добавьте после существующих методов, например после saveYOLOAnnotation
+
+void VulkanApplication::ensureDirectoryExists(const std::string& path)
+{
+    std::string command;
+#ifdef _WIN32
+    command = "if not exist \"" + path + "\" mkdir \"" + path + "\"";
+#else
+    command = "mkdir -p \"" + path + "\"";
+#endif
+    system(command.c_str());
+}
+
+void VulkanApplication::createYOLODatasetStructure()
+{
+    if (!yoloDataset.useDatasetStructure) return;
+
+    // Создаем основную структуру папок
+    ensureDirectoryExists(yoloDataset.datasetPath);
+    ensureDirectoryExists(yoloDataset.datasetPath + "/images");
+    ensureDirectoryExists(yoloDataset.datasetPath + "/labels");
+
+    std::cout << "YOLO dataset structure created at: " << yoloDataset.datasetPath << std::endl;
+    std::cout << "  - " << yoloDataset.datasetPath << "/images/" << std::endl;
+    std::cout << "  - " << yoloDataset.datasetPath << "/labels/" << std::endl;
+}
+
+std::string VulkanApplication::getYOLOImagePath(const std::string& baseFilename)
+{
+    if (!yoloDataset.useDatasetStructure) {
+        return baseFilename + ".png";  // В текущую папку
+    }
+
+    // Создаем структуру если нужно
+    createYOLODatasetStructure();
+
+    // Возвращаем путь в папку images
+    return yoloDataset.datasetPath + "/images/" + baseFilename + ".png";
+}
+
+std::string VulkanApplication::getYOLOLabelPath(const std::string& baseFilename)
+{
+    if (!yoloDataset.useDatasetStructure) {
+        return baseFilename + ".txt";  // В текущую папку
+    }
+
+    // Создаем структуру если нужно
+    createYOLODatasetStructure();
+
+    // Возвращаем путь в папку labels
+    return yoloDataset.datasetPath + "/labels/" + baseFilename + ".txt";
+}
+
 void VulkanApplication::saveYOLOAnnotation(const std::string& filename)
 {
     if (!yoloData.saveForYOLO) {
-        return; // Не сохраняем, если выключено
+        return;
     }
 
-    if (!showSelectionRect || selectionRect.left == 0 && selectionRect.right == 0) {
+    if (!showSelectionRect || (selectionRect.left == 0 && selectionRect.right == 0)) {
         std::cout << "Selection rect not visible, skipping YOLO annotation" << std::endl;
         return;
     }
 
-    // Создаем имя файла для YOLO аннотации
-    std::string txtFilename = filename + ".txt";
+    // Получаем путь для лейбла с учетом структуры папок
+    std::string txtFilename = getYOLOLabelPath(filename);
 
-    // Получаем размеры рамки в пикселях
     float boxWidth = selectionRect.right - selectionRect.left;
     float boxHeight = selectionRect.bottom - selectionRect.top;
 
-    // Проверяем, что рамка имеет корректные размеры
     if (boxWidth < 1.0f || boxHeight < 1.0f) {
         std::cerr << "Invalid bounding box dimensions!" << std::endl;
         return;
     }
 
-    // YOLO формат: <class_id> <x_center> <y_center> <width> <height>
-    // Все координаты нормализованы относительно размеров изображения
-
-    // Центр bounding box в пикселях
     float centerX = selectionRect.left + boxWidth / 2.0f;
     float centerY = selectionRect.top + boxHeight / 2.0f;
 
-    // Нормализуем координаты (от 0 до 1)
     float normCenterX = centerX / sceneViewport.width;
     float normCenterY = centerY / sceneViewport.height;
     float normWidth = boxWidth / sceneViewport.width;
     float normHeight = boxHeight / sceneViewport.height;
 
-    // Ограничиваем значения от 0 до 1
     normCenterX = std::max(0.0f, std::min(1.0f, normCenterX));
     normCenterY = std::max(0.0f, std::min(1.0f, normCenterY));
     normWidth = std::max(0.0f, std::min(1.0f, normWidth));
     normHeight = std::max(0.0f, std::min(1.0f, normHeight));
 
-    // Сохраняем в файл
+    // Сохраняем YOLO аннотацию
     std::ofstream yoloFile(txtFilename);
-
     if (!yoloFile.is_open()) {
         std::cerr << "Failed to create YOLO annotation file: " << txtFilename << std::endl;
         return;
     }
 
-    // Записываем в формате: class_id x_center y_center width height
-    // Используем class_id из настроек
     yoloFile << yoloData.classId << " "
              << std::fixed << std::setprecision(6) << normCenterX << " "
              << std::fixed << std::setprecision(6) << normCenterY << " "
              << std::fixed << std::setprecision(6) << normWidth << " "
              << std::fixed << std::setprecision(6) << normHeight << std::endl;
-
     yoloFile.close();
 
-    // Также создаем файл с именами классов (для справки)
-    std::ofstream classesFile("classes.txt", std::ios::app);
-    if (classesFile.is_open()) {
-        // Записываем имя класса и его ID, если его еще нет в файле
-        std::string line;
-        std::ifstream checkFile("classes.txt");
-        bool classExists = false;
-        std::string classEntry = std::to_string(yoloData.classId) + " " + yoloData.className;
+    // Обновляем classes.txt в корне датасета
+    std::string classesPath;
+    if (yoloDataset.useDatasetStructure) {
+        classesPath = yoloDataset.datasetPath + "/classes.txt";
+    } else {
+        classesPath = "classes.txt";
+    }
 
-        while (std::getline(checkFile, line)) {
-            if (line == classEntry) {
-                classExists = true;
-                break;
+    // Сначала читаем существующие классы
+    std::vector<std::string> existingClasses;
+    std::ifstream readClasses(classesPath);
+    std::string line;
+
+    while (std::getline(readClasses, line)) {
+        if (!line.empty()) {
+            existingClasses.push_back(line);
+        }
+    }
+    readClasses.close();
+
+    // Проверяем, нужно ли добавить новый класс
+    bool classExists = false;
+    for (size_t i = 0; i < existingClasses.size(); i++) {
+        if (existingClasses[i] == yoloData.className) {
+            classExists = true;
+            // Убеждаемся, что classId соответствует индексу
+            if (yoloData.classId != static_cast<int>(i)) {
+                std::cout << "Warning: Class '" << yoloData.className
+                          << "' already exists with ID " << i
+                          << ", but current ID is " << yoloData.classId << std::endl;
+                // Автоматически исправляем classId
+                yoloData.classId = static_cast<int>(i);
             }
+            break;
         }
-        checkFile.close();
+    }
 
-        if (!classExists) {
-            classesFile << classEntry << std::endl;
+    // Если класс новый, добавляем его
+    if (!classExists) {
+        existingClasses.push_back(yoloData.className);
+        // Обновляем classId на новый индекс
+        yoloData.classId = static_cast<int>(existingClasses.size() - 1);
+    }
+
+    // Перезаписываем classes.txt с правильным форматом
+    std::ofstream writeClasses(classesPath);
+    if (writeClasses.is_open()) {
+        for (const auto& cls : existingClasses) {
+            writeClasses << cls << std::endl;
         }
-        classesFile.close();
+        writeClasses.close();
     }
 
     std::cout << "YOLO annotation saved to " << txtFilename << std::endl;
@@ -601,22 +677,35 @@ glm::vec4 VulkanApplication::calculateBackgroundDisplayRect()
 int VulkanApplication::getNextScreenshotNumber()
 {
     int maxNumber = 0;
+    std::string searchPath;
 
-    // Проверяем существующие файлы в текущей директории
-    for (int i = 1; i <= 999; i++) { // Ограничим до 999 для производительности
+    // Определяем путь для поиска в зависимости от настроек
+    if (yoloDataset.useDatasetStructure) {
+        searchPath = yoloDataset.datasetPath + "/images/";
+        // Создаем структуру папок если нужно
+        createYOLODatasetStructure();
+    } else {
+        searchPath = "";
+    }
+
+    // Проверяем существующие файлы
+    for (int i = 1; i <= 999; i++) {
         std::stringstream ss;
-        ss << "frame_" << std::setw(2) << std::setfill('0') << i << ".png";
+        ss << searchPath << "frame_" << std::setw(2) << std::setfill('0') << i << ".png";
 
         std::ifstream file(ss.str());
         if (file.good()) {
             maxNumber = i;
         } else {
-            break; // Как только нашли первый отсутствующий файл, останавливаемся
+            // Не прерываем цикл, так как могут быть пропуски в нумерации
+            // Просто продолжаем проверку
         }
     }
 
+    // Возвращаем следующий номер после максимального
     return maxNumber + 1;
 }
+
 
 std::string VulkanApplication::generateScreenshotFilename()
 {
@@ -630,8 +719,16 @@ std::string VulkanApplication::generateScreenshotFilename()
 
 void VulkanApplication::saveModelCoordinatesToFile(const std::string& filename, const glm::vec3& modelPos)
 {
-    // Создаем имя файла на основе имени скриншота
-    std::string txtFilename = filename + ".txt";
+    // Определяем путь для сохранения координат
+    std::string txtFilename;
+
+    if (yoloDataset.useDatasetStructure) {
+        // Сохраняем координаты в папку labels вместе с YOLO аннотациями
+        txtFilename = getYOLOLabelPath(filename);
+    } else {
+        // Сохраняем в текущую папку
+        txtFilename = filename + ".txt";
+    }
 
     std::ofstream coordFile(txtFilename);
 
@@ -664,6 +761,14 @@ void VulkanApplication::takeScreenshot()
 
     // Получаем координаты модели
     glm::vec3 modelCoords = getModelCoordinatesRelativeToScreen();
+
+    // Создаем структуру папок если нужно (ДО получения номера)
+    if (yoloDataset.useDatasetStructure) {
+        createYOLODatasetStructure();
+    }
+
+    // Генерируем базовое имя файла
+    std::string baseFilename = generateScreenshotFilename();
 
     if (useStaticBackground && textures.background.image) {
         // Если фон включен, захватываем только область, где отображается фон
@@ -710,24 +815,26 @@ void VulkanApplication::takeScreenshot()
                     );
             }
 
-            // Генерируем имя файла
-            std::string filename = generateScreenshotFilename() + "_background";
-            std::string pngFilename = filename + ".png";
+            // Для фоновых скриншотов добавляем суффикс
+            std::string backgroundBaseFilename = baseFilename + "_background";
+
+            // Получаем путь для изображения
+            std::string pngFilename = getYOLOImagePath(backgroundBaseFilename);
 
             // Сохраняем обрезанное изображение
             stbi_write_png(pngFilename.c_str(), captureWidth, captureHeight, 4,
                            croppedPixels.data(), captureWidth * 4);
 
-            // Сохраняем координаты модели в отдельный файл
-            saveModelCoordinatesToFile(filename, modelCoords);
+            // Сохраняем координаты модели (теперь они попадут в ту же папку что и YOLO)
+            saveModelCoordinatesToFile(backgroundBaseFilename, modelCoords);
 
             // Сохраняем YOLO аннотацию
             if (yoloData.saveForYOLO) {
-                saveYOLOAnnotation(filename);
+                saveYOLOAnnotation(backgroundBaseFilename);
             }
 
-            std::cout << "Background screenshot saved to " << pngFilename
-                      << " (original: " << sceneViewport.width << "x" << sceneViewport.height
+            std::cout << "Background screenshot saved to " << pngFilename << std::endl;
+            std::cout << "  (original: " << sceneViewport.width << "x" << sceneViewport.height
                       << ", cropped: " << captureWidth << "x" << captureHeight << ")" << std::endl;
         }
     } else {
@@ -739,23 +846,23 @@ void VulkanApplication::takeScreenshot()
                 vkDeviceWaitIdle(device);
             }
 
-            std::string filename = generateScreenshotFilename();
-            std::string pngFilename = filename + ".png";
+            // Получаем путь для изображения
+            std::string pngFilename = getYOLOImagePath(baseFilename);
 
-            screenshot->saveToFile(filename); // saveToFile уже добавляет .png
+            // Сохраняем PNG в правильную папку
+            std::string pngPathWithoutExt = pngFilename.substr(0, pngFilename.length() - 4);
+            screenshot->saveToFile(pngPathWithoutExt);
 
-            // Сохраняем координаты модели в отдельный файл
-            saveModelCoordinatesToFile(filename, modelCoords);
+            // Сохраняем координаты модели (теперь они попадут в ту же папку что и YOLO)
+            saveModelCoordinatesToFile(baseFilename, modelCoords);
 
             // Сохраняем YOLO аннотацию
-            saveYOLOAnnotation(filename);
+            saveYOLOAnnotation(baseFilename);
 
-            std::cout << "Scene screenshot saved: " << pngFilename << " ("
-                      << sceneViewport.width << "x" << sceneViewport.height << ")" << std::endl;
+            std::cout << "Scene screenshot saved to " << pngFilename << std::endl;
         }
     }
 }
-
 
 void VulkanApplication::createFullscreenQuad()
 {
@@ -3140,16 +3247,36 @@ void VulkanApplication::updateOverlay()
     if (ui->header("YOLO")) {
         ui->checkbox("Save YOLO annotations", &yoloData.saveForYOLO);
 
+        // Добавляем опцию для структуры папок
+        ui->checkbox("Use dataset folders", &yoloDataset.useDatasetStructure);
+
+        if (yoloDataset.useDatasetStructure) {
+            // Поле для ввода имени папки датасета
+            static char datasetPathBuffer[256];
+            strncpy(datasetPathBuffer, yoloDataset.datasetPath.c_str(), sizeof(datasetPathBuffer));
+            datasetPathBuffer[sizeof(datasetPathBuffer) - 1] = '\0';
+
+            ImGui::Text("Dataset folder:");
+            ImGui::SameLine();
+            if (ImGui::InputText("##datasetpath", datasetPathBuffer, sizeof(datasetPathBuffer))) {
+                yoloDataset.datasetPath = datasetPathBuffer;
+            }
+
+            // Кнопка для создания структуры
+            if (ui->button("Create dataset folders")) {
+                createYOLODatasetStructure();
+            }
+        }
+
         // Поле для ввода ID класса
         ImGui::Text("Class ID:");
         ImGui::SameLine();
         if (ImGui::InputInt("##classid", &yoloData.classId, 1, 10)) {
-            // Ограничиваем ID от 0 до 999
             if (yoloData.classId < 0) yoloData.classId = 0;
             if (yoloData.classId > 999) yoloData.classId = 999;
         }
 
-        // Поле для ввода имени класса - ИСПРАВЛЕНО: используем InputText вместо Text
+        // Поле для ввода имени класса
         static char classNameBuffer[256];
         strncpy(classNameBuffer, yoloData.className.c_str(), sizeof(classNameBuffer));
         classNameBuffer[sizeof(classNameBuffer) - 1] = '\0';
@@ -3181,11 +3308,18 @@ void VulkanApplication::updateOverlay()
             ui->text("No bounding box visible");
         }
 
-        // Информация о следующем файле
+        // Информация о следующем файле с учетом структуры
         int nextNum = getNextScreenshotNumber();
-        ui->text("Next files:");
-        ui->text("  frame_%02d.png", nextNum);
-        ui->text("  frame_%02d.txt (YOLO)", nextNum);
+        if (yoloDataset.useDatasetStructure) {
+            ui->text("Next files in %s:", yoloDataset.datasetPath.c_str());
+            ui->text("  images/frame_%02d.png", nextNum);
+            ui->text("  labels/frame_%02d.txt", nextNum);
+            ui->text("  classes.txt");
+        } else {
+            ui->text("Next files:");
+            ui->text("  frame_%02d.png", nextNum);
+            ui->text("  frame_%02d.txt (YOLO)", nextNum);
+        }
     }
 
     if (ui->header("Background")) {
