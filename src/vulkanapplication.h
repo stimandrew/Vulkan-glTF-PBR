@@ -43,6 +43,22 @@ private:
     void destroyBackgroundResources();
 
 public:
+    struct SelectionRect {
+        VkBuffer vertexBuffer = VK_NULL_HANDLE;
+        VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+        int vertexCount = 0;
+        bool initialized = false;
+        // Текущие экранные координаты рамки
+        float left, right, top, bottom;
+    } selectionRect;
+    bool showSelectionRect = true;
+    void createSelectionRectResources();
+    void destroySelectionRectResources();
+    void updateSelectionRect(const glm::vec3& modelPos, const glm::mat4& viewProj);
+    void renderSelectionRect(VkCommandBuffer commandBuffer);
+
     void saveModelCoordinates(const std::string& filename, const glm::vec3& modelPos);
     glm::vec3 getModelCoordinatesRelativeToScreen();
 

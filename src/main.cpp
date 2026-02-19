@@ -85,7 +85,8 @@ static void handleEvent(const xcb_generic_event_t *event)
 }
 int main(const int argc, const char *argv[])
 {
-	for (size_t i = 0; i < argc; i++) { VulkanApplication::args.push_back(argv[i]); };
+    for (size_t i = 0; i < argc; i++) { VulkanApplication::args.push_back(argv[i]); };
+
 	vulkanApplication = new VulkanApplication();
 	vulkanApplication->initVulkan();
 	vulkanApplication->setupWindow();

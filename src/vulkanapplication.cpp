@@ -2,11 +2,14 @@
 #include <fstream>
 #include <iomanip>  // Добавьте эту строку для std::put_time
 #include <ctime>    // Для std::localtime
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/projection.hpp>
 
 // Constructor
 VulkanApplication::VulkanApplication() : VulkanExampleBase()
 {
     title = "Vulkan glTF 2.0 PBR - (C) Sascha Willems (www.saschawillems.de)";
+    selectionRect.initialized = false;
 #if defined(TINYGLTF_ENABLE_DRACO)
     std::cout << "Draco mesh compression is enabled" << std::endl;
 #endif
@@ -15,6 +18,7 @@ VulkanApplication::VulkanApplication() : VulkanExampleBase()
 // Destructor
 VulkanApplication::~VulkanApplication()
 {
+    destroySelectionRectResources();
     destroyBackgroundResources();
     destroyUIResources();
     destroyFullscreenQuad();
@@ -57,6 +61,392 @@ VulkanApplication::~VulkanApplication()
 
     delete screenshot;
 }
+
+void VulkanApplication::createSelectionRectResources() {
+    if (selectionRect.initialized) return;
+
+    std::cout << "Creating selection rect resources..." << std::endl;
+
+    // Создаем вершинный буфер для прямоугольника (4 вершины для линии)
+    struct RectVertex { float x, y; };
+    std::vector<RectVertex> vertices = {
+        {0.0f, 0.0f}, {1.0f, 0.0f}, // нижняя грань
+        {1.0f, 0.0f}, {1.0f, 1.0f}, // правая грань
+        {1.0f, 1.0f}, {0.0f, 1.0f}, // верхняя грань
+        {0.0f, 1.0f}, {0.0f, 0.0f}  // левая грань
+    };
+    selectionRect.vertexCount = static_cast<int>(vertices.size());
+
+    VkDeviceSize bufferSize = vertices.size() * sizeof(RectVertex);
+
+    // Создаем staging буфер
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingMemory;
+
+    VkBufferCreateInfo bufferCreateInfo{};
+    bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferCreateInfo.size = bufferSize;
+    bufferCreateInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VK_CHECK_RESULT(vkCreateBuffer(device, &bufferCreateInfo, nullptr, &stagingBuffer));
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(device, stagingBuffer, &memReqs);
+
+    VkMemoryAllocateInfo memAllocInfo{};
+    memAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    memAllocInfo.allocationSize = memReqs.size;
+    memAllocInfo.memoryTypeIndex = vulkanDevice->getMemoryType(
+        memReqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+        );
+
+    VK_CHECK_RESULT(vkAllocateMemory(device, &memAllocInfo, nullptr, &stagingMemory));
+    VK_CHECK_RESULT(vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0));
+
+    // Копируем данные
+    uint8_t* data;
+    VK_CHECK_RESULT(vkMapMemory(device, stagingMemory, 0, bufferSize, 0, (void**)&data));
+    memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
+    vkUnmapMemory(device, stagingMemory);
+
+    // Создаем финальный буфер
+    bufferCreateInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VK_CHECK_RESULT(vkCreateBuffer(device, &bufferCreateInfo, nullptr, &selectionRect.vertexBuffer));
+
+    vkGetBufferMemoryRequirements(device, selectionRect.vertexBuffer, &memReqs);
+    memAllocInfo.allocationSize = memReqs.size;
+    memAllocInfo.memoryTypeIndex = vulkanDevice->getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    VK_CHECK_RESULT(vkAllocateMemory(device, &memAllocInfo, nullptr, &selectionRect.vertexMemory));
+    VK_CHECK_RESULT(vkBindBufferMemory(device, selectionRect.vertexBuffer, selectionRect.vertexMemory, 0));
+
+    // Копируем из staging в финальный буфер
+    VkCommandBuffer copyCmd = vulkanDevice->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+
+    VkBufferCopy copyRegion{};
+    copyRegion.size = bufferSize;
+    vkCmdCopyBuffer(copyCmd, stagingBuffer, selectionRect.vertexBuffer, 1, &copyRegion);
+
+    vulkanDevice->flushCommandBuffer(copyCmd, queue, true);
+
+    vkDestroyBuffer(device, stagingBuffer, nullptr);
+    vkFreeMemory(device, stagingMemory, nullptr);
+
+    std::cout << "Vertex buffer created successfully" << std::endl;
+
+    // Создаем pipeline layout с push constants
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(float) * 6; // screenSize(2) + rectLeftTop(2) + rectRightBottom(2)
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+
+    VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &selectionRect.pipelineLayout));
+    std::cout << "Pipeline layout created successfully" << std::endl;
+
+    // Создаем шейдеры
+    std::cout << "Loading vertex shader..." << std::endl;
+    auto vertShader = loadShader(device, "selection_rect.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+    if (vertShader.module == VK_NULL_HANDLE) {
+        std::cerr << "Failed to load vertex shader!" << std::endl;
+        return;
+    }
+    std::cout << "Vertex shader loaded successfully" << std::endl;
+
+    std::cout << "Loading fragment shader..." << std::endl;
+    auto fragShader = loadShader(device, "selection_rect.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+    if (fragShader.module == VK_NULL_HANDLE) {
+        std::cerr << "Failed to load fragment shader!" << std::endl;
+        return;
+    }
+    std::cout << "Fragment shader loaded successfully" << std::endl;
+
+    VkPipelineShaderStageCreateInfo shaderStages[] = { vertShader, fragShader };
+
+    // Вершинный ввод
+    VkVertexInputBindingDescription bindingDesc{};
+    bindingDesc.binding = 0;
+    bindingDesc.stride = sizeof(RectVertex);
+    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attrDesc{};
+    attrDesc.location = 0;
+    attrDesc.binding = 0;
+    attrDesc.format = VK_FORMAT_R32G32_SFLOAT;
+    attrDesc.offset = 0;
+
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
+    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDesc;
+    vertexInputInfo.vertexAttributeDescriptionCount = 1;
+    vertexInputInfo.pVertexAttributeDescriptions = &attrDesc;
+
+    // Остальные состояния
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.lineWidth = 1.0f; // Изменено с 3.0f на 1.0f для совместимости
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = settings.sampleCount;
+
+    VkPipelineColorBlendAttachmentState blendAttachment{};
+    blendAttachment.blendEnable = VK_TRUE;
+    blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &blendAttachment;
+
+    std::vector<VkDynamicState> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicState.pDynamicStates = dynamicStates.data();
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = shaderStages;
+    pipelineInfo.pVertexInputState = &vertexInputInfo;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.layout = selectionRect.pipelineLayout;
+    pipelineInfo.renderPass = renderPass;
+    pipelineInfo.subpass = 0;
+
+    VkResult result = vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineInfo, nullptr, &selectionRect.pipeline);
+    if (result != VK_SUCCESS) {
+        std::cerr << "Failed to create graphics pipeline! Error: " << result << std::endl;
+        return;
+    }
+    std::cout << "Graphics pipeline created successfully" << std::endl;
+
+    vkDestroyShaderModule(device, vertShader.module, nullptr);
+    vkDestroyShaderModule(device, fragShader.module, nullptr);
+
+    selectionRect.initialized = true;
+    std::cout << "Selection rect resources created successfully!" << std::endl;
+}
+
+void VulkanApplication::destroySelectionRectResources() {
+    if (selectionRect.vertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device, selectionRect.vertexBuffer, nullptr);
+        selectionRect.vertexBuffer = VK_NULL_HANDLE;
+    }
+    if (selectionRect.vertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, selectionRect.vertexMemory, nullptr);
+        selectionRect.vertexMemory = VK_NULL_HANDLE;
+    }
+    if (selectionRect.pipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, selectionRect.pipeline, nullptr);
+        selectionRect.pipeline = VK_NULL_HANDLE;
+    }
+    if (selectionRect.pipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, selectionRect.pipelineLayout, nullptr);
+        selectionRect.pipelineLayout = VK_NULL_HANDLE;
+    }
+    selectionRect.initialized = false;
+}
+
+
+void VulkanApplication::updateSelectionRect(const glm::vec3& modelPos, const glm::mat4& viewProj) {
+    // Получаем размеры модели из AABB
+    const glm::mat4& modelAABB = models.scene.aabb;
+
+    glm::vec3 modelMin = glm::vec3(modelAABB[3]);
+    glm::vec3 modelMax = modelMin + glm::vec3(modelAABB[0][0], modelAABB[1][1], modelAABB[2][2]);
+
+    // Создаем 8 углов AABB в локальных координатах модели
+    std::vector<glm::vec3> corners = {
+        glm::vec3(modelMin.x, modelMin.y, modelMin.z),
+        glm::vec3(modelMax.x, modelMin.y, modelMin.z),
+        glm::vec3(modelMax.x, modelMax.y, modelMin.z),
+        glm::vec3(modelMin.x, modelMax.y, modelMin.z),
+        glm::vec3(modelMin.x, modelMin.y, modelMax.z),
+        glm::vec3(modelMax.x, modelMin.y, modelMax.z),
+        glm::vec3(modelMax.x, modelMax.y, modelMax.z),
+        glm::vec3(modelMin.x, modelMax.y, modelMax.z)
+    };
+
+    // Матрица модели (та же, что и в шейдере)
+    float scale = (1.0f / std::max(models.scene.aabb[0][0],
+                                   std::max(models.scene.aabb[1][1], models.scene.aabb[2][2]))) * 0.5f;
+    glm::vec3 translate = -glm::vec3(models.scene.aabb[3][0], models.scene.aabb[3][1], models.scene.aabb[3][2]);
+    translate += -0.5f * glm::vec3(models.scene.aabb[0][0], models.scene.aabb[1][1], models.scene.aabb[2][2]);
+
+    glm::mat4 modelMatrix = glm::mat4(1.0f);
+    modelMatrix[0][0] = scale;
+    modelMatrix[1][1] = scale;
+    modelMatrix[2][2] = scale;
+    modelMatrix = glm::translate(modelMatrix, translate);
+    modelMatrix = glm::translate(modelMatrix, modelPos);
+
+    // Проецируем все углы в экранные координаты
+    float minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
+    int validPoints = 0;
+    bool anyPointVisible = false;
+
+    for (const auto& corner : corners) {
+        glm::vec4 worldPos = modelMatrix * glm::vec4(corner, 1.0f);
+        glm::vec4 clipPos = viewProj * worldPos;
+
+        // Проверяем, что точка перед камерой (w > 0)
+        if (clipPos.w <= 0.0f) continue;
+
+        // Перспективное деление
+        glm::vec3 ndcPos = glm::vec3(clipPos) / clipPos.w;
+
+        // Проверяем видимость точки (хотя бы частично)
+        bool pointVisible = (ndcPos.x >= -1.0f && ndcPos.x <= 1.0f &&
+                             ndcPos.y >= -1.0f && ndcPos.y <= 1.0f);
+
+        if (pointVisible) {
+            anyPointVisible = true;
+        }
+
+        // Преобразуем NDC в экранные координаты (даже для невидимых точек)
+        float screenX = (ndcPos.x * 0.5f + 0.5f) * sceneViewport.width + sceneViewport.x;
+        float screenY = (ndcPos.y * 0.5f + 0.5f) * sceneViewport.height + sceneViewport.y;
+
+        minX = std::min(minX, screenX);
+        minY = std::min(minY, screenY);
+        maxX = std::max(maxX, screenX);
+        maxY = std::max(maxY, screenY);
+        validPoints++;
+    }
+
+    // Если ни одна точка не попала в кадр, не рисуем рамку
+    if (validPoints == 0 || !anyPointVisible) {
+        selectionRect.left = selectionRect.right = 0;
+        selectionRect.top = selectionRect.bottom = 0;
+        return;
+    }
+
+    // ИСПРАВЛЕНИЕ: Обрезаем рамку по границам viewport'а
+    float viewportLeft = static_cast<float>(sceneViewport.x);
+    float viewportRight = static_cast<float>(sceneViewport.x + sceneViewport.width);
+    float viewportTop = static_cast<float>(sceneViewport.y);
+    float viewportBottom = static_cast<float>(sceneViewport.y + sceneViewport.height);
+
+    // Принудительно обрезаем координаты рамки по границам viewport'а
+    minX = std::max(minX, viewportLeft);
+    maxX = std::min(maxX, viewportRight);
+    minY = std::max(minY, viewportTop);
+    maxY = std::min(maxY, viewportBottom);
+
+    // Проверяем, что после обрезки рамка имеет смысл
+    if (minX >= maxX || minY >= maxY) {
+        selectionRect.left = selectionRect.right = 0;
+        selectionRect.top = selectionRect.bottom = 0;
+        return;
+    }
+
+    // Добавляем отступ
+    const float lineWidth = 1.0f;  // Толщина линии в пикселях
+    const float padding = 1.0f;    // Основной отступ от модели в пикселях
+
+    // Для LINE_LIST топологии, линия рисуется от точки до точки
+    float totalPadding = padding + lineWidth * 0.5f;
+
+    selectionRect.left = minX - totalPadding;
+    selectionRect.right = maxX + totalPadding;
+    selectionRect.top = minY - totalPadding;
+    selectionRect.bottom = maxY + totalPadding;
+
+    // Финальная проверка границ после добавления отступа
+    selectionRect.left = std::max(selectionRect.left, viewportLeft);
+    selectionRect.right = std::min(selectionRect.right, viewportRight);
+    selectionRect.top = std::max(selectionRect.top, viewportTop);
+    selectionRect.bottom = std::min(selectionRect.bottom, viewportBottom);
+}
+
+
+void VulkanApplication::renderSelectionRect(VkCommandBuffer commandBuffer) {
+    if (!showSelectionRect) return;
+    if (!selectionRect.initialized) return;
+
+    // Проверяем, что рамка имеет корректные размеры
+    float width = selectionRect.right - selectionRect.left;
+    float height = selectionRect.bottom - selectionRect.top;
+
+    // Добавляем проверку на минимальную ширину/высоту после обрезки
+    if (width < 1.0f || height < 1.0f) return;
+
+    // Проверяем, что рамка полностью в пределах viewport'а
+    float viewportLeft = static_cast<float>(sceneViewport.x);
+    float viewportRight = static_cast<float>(sceneViewport.x + sceneViewport.width);
+    float viewportTop = static_cast<float>(sceneViewport.y);
+    float viewportBottom = static_cast<float>(sceneViewport.y + sceneViewport.height);
+
+    if (selectionRect.right <= viewportLeft || selectionRect.left >= viewportRight ||
+        selectionRect.bottom <= viewportTop || selectionRect.top >= viewportBottom) {
+        return;
+    }
+
+    // Устанавливаем viewport и scissor для области сцены
+    vkCmdSetViewport(commandBuffer, 0, 1, &sceneViewport.vkViewport);
+    vkCmdSetScissor(commandBuffer, 0, 1, &sceneViewport.vkScissor);
+
+    // Push constants: screenSize, rectLeftTop, rectRightBottom
+    float pushConstants[6] = {
+        static_cast<float>(sceneViewport.width),
+        static_cast<float>(sceneViewport.height),
+        selectionRect.left,
+        selectionRect.top,
+        selectionRect.right,
+        selectionRect.bottom
+    };
+
+    vkCmdPushConstants(commandBuffer, selectionRect.pipelineLayout,
+                       VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pushConstants), pushConstants);
+
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, selectionRect.pipeline);
+
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &selectionRect.vertexBuffer, &offset);
+
+    vkCmdDraw(commandBuffer, selectionRect.vertexCount, 1, 0, 0);
+}
+
+
 
 glm::vec4 VulkanApplication::calculateBackgroundDisplayRect()
 {
@@ -686,7 +1076,7 @@ void VulkanApplication::recordSceneCommandBuffer(VkCommandBuffer commandBuffer)
     for (auto node : model.nodes) {
         renderNode(node, frameIndex, vkglTF::Material::ALPHAMODE_BLEND);
     }
-
+    renderSelectionRect(commandBuffer);
     vkCmdEndRenderPass(commandBuffer);
 }
 
@@ -816,6 +1206,7 @@ void VulkanApplication::recordCommandBuffer()
             renderNode(node, frameIndex, vkglTF::Material::ALPHAMODE_BLEND);
         }
 
+        renderSelectionRect(commandBuffers[frameIndex]);
         ui->draw(commandBuffers[frameIndex]);
 
         vkCmdEndRenderPass(commandBuffers[frameIndex]);
@@ -863,7 +1254,7 @@ void VulkanApplication::createBackgroundResources()
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(BackgroundPushConstants);
+    pushConstantRange.size = sizeof(float) * 6;
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -2456,6 +2847,7 @@ void VulkanApplication::prepare()
     setupDescriptors();
     preparePipelines();
     createUIResources();
+    createSelectionRectResources();
 
     ui = new UI(vulkanDevice, renderPass, queue, pipelineCache, settings.sampleCount);
     updateOverlay();
@@ -2569,6 +2961,8 @@ void VulkanApplication::updateOverlay()
             modelPosition = glm::vec3(0.0f);
             updateUniformData();
         }
+
+        ui->checkbox("Show selection rect", &showSelectionRect);
     }
 
     if (ui->header("Background")) {
@@ -2713,6 +3107,7 @@ void VulkanApplication::updateOverlay()
 #endif
 }
 
+
 void VulkanApplication::render()
 {
     if (!prepared) {
@@ -2739,6 +3134,8 @@ void VulkanApplication::render()
     recordCommandBuffer();
 
     updateUniformData();
+    glm::mat4 viewProj = camera.matrices.perspective * camera.matrices.view;
+    updateSelectionRect(modelPosition, viewProj);
     UniformBufferSet currentUB = uniformBuffers[frameIndex];
     memcpy(currentUB.scene.mapped, &shaderValuesScene, sizeof(shaderValuesScene));
     memcpy(currentUB.params.mapped, &shaderValuesParams, sizeof(shaderValuesParams));
