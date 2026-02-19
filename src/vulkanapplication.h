@@ -53,6 +53,7 @@ public:
         // Текущие экранные координаты рамки
         float left, right, top, bottom;
     } selectionRect;
+
     bool showSelectionRect = true;
     void createSelectionRectResources();
     void destroySelectionRectResources();
@@ -61,6 +62,7 @@ public:
 
     void saveModelCoordinates(const std::string& filename, const glm::vec3& modelPos);
     glm::vec3 getModelCoordinatesRelativeToScreen();
+    glm::vec3 modelRotation = glm::vec3(0.0f);
 
     // Константа для файла с координатами
     static constexpr const char* COORDINATES_FILE = "coordinate.txt";

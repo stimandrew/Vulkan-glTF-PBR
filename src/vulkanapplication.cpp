@@ -306,17 +306,23 @@ void VulkanApplication::updateSelectionRect(const glm::vec3& modelPos, const glm
         glm::vec3(modelMin.x, modelMax.y, modelMax.z)
     };
 
-    // Матрица модели (та же, что и в шейдере)
+    // Матрица модели с учетом масштабирования, поворота и позиции
     float scale = (1.0f / std::max(models.scene.aabb[0][0],
                                    std::max(models.scene.aabb[1][1], models.scene.aabb[2][2]))) * 0.5f;
     glm::vec3 translate = -glm::vec3(models.scene.aabb[3][0], models.scene.aabb[3][1], models.scene.aabb[3][2]);
     translate += -0.5f * glm::vec3(models.scene.aabb[0][0], models.scene.aabb[1][1], models.scene.aabb[2][2]);
 
+    // Строим матрицу модели так же, как в updateUniformData
     glm::mat4 modelMatrix = glm::mat4(1.0f);
-    modelMatrix[0][0] = scale;
-    modelMatrix[1][1] = scale;
-    modelMatrix[2][2] = scale;
+    modelMatrix = glm::scale(modelMatrix, glm::vec3(scale));
     modelMatrix = glm::translate(modelMatrix, translate);
+
+    // Применяем поворот вокруг центра модели
+    modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+    modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+    modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+
+    // Применяем позицию модели
     modelMatrix = glm::translate(modelMatrix, modelPos);
 
     // Проецируем все углы в экранные координаты
@@ -495,8 +501,8 @@ glm::vec4 VulkanApplication::calculateBackgroundDisplayRect()
         finalHeight = sceneViewport.height - finalY;
     }
 
-    std::cout << "Background display rect: x=" << finalX << ", y=" << finalY
-              << ", w=" << finalWidth << ", h=" << finalHeight << std::endl;
+    // std::cout << "Background display rect: x=" << finalX << ", y=" << finalY
+    //           << ", w=" << finalWidth << ", h=" << finalHeight << std::endl;
 
     return glm::vec4(finalX, finalY, finalWidth, finalHeight);
 }
@@ -959,6 +965,7 @@ void VulkanApplication::resetCamera()
 
     // Сбрасываем позицию модели
     modelPosition = glm::vec3(0.0f);
+    modelRotation = glm::vec3(0.0f);
 }
 
 void VulkanApplication::renderNode(vkglTF::Node *node, uint32_t cbIndex, vkglTF::Material::AlphaMode alphaMode)
@@ -1500,8 +1507,9 @@ void VulkanApplication::loadScene(std::string filename)
     animationIndex = 0;
     animationTimer = 0.0f;
 
-    // Сбрасываем позицию модели при загрузке новой сцены
+    // Сбрасываем позицию и поворот модели при загрузке новой сцены
     modelPosition = glm::vec3(0.0f);
+    modelRotation = glm::vec3(0.0f);  // Добавить эту строку
 
     auto tStart = std::chrono::high_resolution_clock::now();
     models.scene.loadFromFile(filename, vulkanDevice, queue);
@@ -2759,14 +2767,21 @@ void VulkanApplication::updateUniformData()
     glm::vec3 translate = -glm::vec3(models.scene.aabb[3][0], models.scene.aabb[3][1], models.scene.aabb[3][2]);
     translate += -0.5f * glm::vec3(models.scene.aabb[0][0], models.scene.aabb[1][1], models.scene.aabb[2][2]);
 
-    // Применяем позицию модели из слайдеров
+    // Применяем масштабирование и позицию модели из слайдеров
     shaderValuesScene.model = glm::mat4(1.0f);
-    shaderValuesScene.model[0][0] = scale;
-    shaderValuesScene.model[1][1] = scale;
-    shaderValuesScene.model[2][2] = scale;
 
-    // Сначала перемещаем в центр, затем применяем позицию из слайдеров
+    // 1. Сначала масштабируем модель до нужного размера
+    shaderValuesScene.model = glm::scale(shaderValuesScene.model, glm::vec3(scale));
+
+    // 2. Перемещаем модель так, чтобы ее центр оказался в начале координат
     shaderValuesScene.model = glm::translate(shaderValuesScene.model, translate);
+
+    // 3. Применяем поворот вокруг центра модели
+    shaderValuesScene.model = glm::rotate(shaderValuesScene.model, glm::radians(modelRotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+    shaderValuesScene.model = glm::rotate(shaderValuesScene.model, glm::radians(modelRotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+    shaderValuesScene.model = glm::rotate(shaderValuesScene.model, glm::radians(modelRotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+
+    // 4. Применяем позицию модели из слайдеров (перемещение в мировом пространстве)
     shaderValuesScene.model = glm::translate(shaderValuesScene.model, modelPosition);
 
     glm::mat4 cv = glm::inverse(camera.matrices.view);
@@ -2956,9 +2971,26 @@ void VulkanApplication::updateOverlay()
             updateUniformData();
         }
 
+        // Добавляем слайдеры для поворота модели
+        ui->text("Model Rotation (degrees):");
+        if (ui->slider("X Rotation", &modelRotation.x, -180.0f, 180.0f)) {
+            updateUniformData();
+        }
+        if (ui->slider("Y Rotation", &modelRotation.y, -180.0f, 180.0f)) {
+            updateUniformData();
+        }
+        if (ui->slider("Z Rotation", &modelRotation.z, -180.0f, 180.0f)) {
+            updateUniformData();
+        }
+
         // Добавляем кнопку для сброса позиции
         if (ui->button("Reset Position")) {
             modelPosition = glm::vec3(0.0f);
+            updateUniformData();
+        }
+
+        if (ui->button("Reset Rotation")) {
+            modelRotation = glm::vec3(0.0f);
             updateUniformData();
         }
 
