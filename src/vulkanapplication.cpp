@@ -4,6 +4,9 @@
 #include <ctime>    // Для std::localtime
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/projection.hpp>
+#include <cstdlib>   // для rand(), srand()
+#include <ctime>     // для time()
+#include <cmath>     // для M_PI
 
 // Constructor
 VulkanApplication::VulkanApplication() : VulkanExampleBase()
@@ -3237,6 +3240,27 @@ void VulkanApplication::updateOverlay()
             updateUniformData();
         }
 
+        ImGui::Separator();
+        if (ui->button("Random Position/Rotation")) {
+            randomizeModelPositionAndRotation();
+        }
+        ImGui::SameLine();
+        if (ui->button("Random Position Only")) {
+            srand(static_cast<unsigned int>(time(nullptr)));
+            modelPosition = getRandomVisiblePosition();
+            updateUniformData();
+            std::cout << "Random position: (" << modelPosition.x << ", "
+                      << modelPosition.y << ", " << modelPosition.z << ")" << std::endl;
+        }
+        ImGui::SameLine();
+        if (ui->button("Random Rotation Only")) {
+            srand(static_cast<unsigned int>(time(nullptr)));
+            modelRotation = getRandomRotation();
+            updateUniformData();
+            std::cout << "Random rotation: (" << modelRotation.x << "°, "
+                      << modelRotation.y << "°, " << modelRotation.z << "°)" << std::endl;
+        }
+
         if (ui->button("Reset Camera")) {
             resetCamera();
         }
@@ -3558,4 +3582,115 @@ void VulkanApplication::fileDropped(std::string filename)
     vkDeviceWaitIdle(device);
     loadScene(filename);
     setupDescriptors();
+}
+
+// Добавьте после существующих методов
+
+bool VulkanApplication::isPositionVisible(const glm::vec3& pos)
+{
+    // Проецируем центр модели в экранные координаты
+    glm::mat4 viewProj = camera.matrices.perspective * camera.matrices.view;
+
+    // Получаем текущую матрицу модели без позиции
+    float scale = (1.0f / std::max(models.scene.aabb[0][0],
+                                   std::max(models.scene.aabb[1][1], models.scene.aabb[2][2]))) * 0.5f;
+    glm::vec3 translate = -glm::vec3(models.scene.aabb[3][0], models.scene.aabb[3][1], models.scene.aabb[3][2]);
+    translate += -0.5f * glm::vec3(models.scene.aabb[0][0], models.scene.aabb[1][1], models.scene.aabb[2][2]);
+
+    glm::mat4 modelMatrix = glm::mat4(1.0f);
+    modelMatrix = glm::scale(modelMatrix, glm::vec3(scale));
+    modelMatrix = glm::translate(modelMatrix, translate);
+    modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+    modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+    modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+    modelMatrix = glm::translate(modelMatrix, pos);
+
+    // Проецируем центр модели
+    glm::vec4 centerPos = modelMatrix * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    glm::vec4 clipPos = viewProj * centerPos;
+
+    if (clipPos.w <= 0.0f) return false;
+
+    glm::vec3 ndcPos = glm::vec3(clipPos) / clipPos.w;
+
+    // Проверяем видимость
+    return (ndcPos.x >= -1.0f && ndcPos.x <= 1.0f &&
+            ndcPos.y >= -1.0f && ndcPos.y <= 1.0f);
+}
+
+glm::vec3 VulkanApplication::getRandomVisiblePosition()
+{
+    const int maxAttempts = 100;
+    glm::vec3 randomPos;
+
+    // Определяем диапазон поиска на основе размеров сцены
+    // Используем AABB модели для определения примерного размера
+    float modelWidth = models.scene.aabb[0][0];
+    float modelHeight = models.scene.aabb[1][1];
+    float modelDepth = models.scene.aabb[2][2];
+
+    // Базовый радиус для поиска (можно настроить под вашу сцену)
+    float searchRadius = 1000.0f;
+
+    for (int attempt = 0; attempt < maxAttempts; attempt++) {
+        // Генерируем случайную позицию в сфере
+        float theta = static_cast<float>(rand()) / RAND_MAX * 2.0f * M_PI;
+        float phi = static_cast<float>(rand()) / RAND_MAX * M_PI - M_PI / 2.0f;
+        float r = static_cast<float>(rand()) / RAND_MAX * searchRadius;
+
+        randomPos.x = r * cos(phi) * cos(theta);
+        randomPos.y = r * sin(phi);
+        randomPos.z = r * cos(phi) * sin(theta);
+
+        // Проверяем видимость
+        if (isPositionVisible(randomPos)) {
+            return randomPos;
+        }
+    }
+
+    // Если не нашли видимую позицию, возвращаем центр
+    std::cout << "Warning: Could not find visible position after " << maxAttempts << " attempts" << std::endl;
+    return glm::vec3(0.0f);
+}
+
+glm::vec3 VulkanApplication::getRandomRotation()
+{
+    // Генерируем случайные углы поворота в градусах
+    glm::vec3 rotation;
+    rotation.x = (static_cast<float>(rand()) / RAND_MAX * 360.0f) - 180.0f;  // -180 to 180
+    rotation.y = (static_cast<float>(rand()) / RAND_MAX * 360.0f) - 180.0f;
+    rotation.z = (static_cast<float>(rand()) / RAND_MAX * 360.0f) - 180.0f;
+
+    return rotation;
+}
+
+void VulkanApplication::randomizeModelPositionAndRotation()
+{
+    if (!prepared || models.scene.linearNodes.empty()) {
+        std::cerr << "Cannot randomize - scene not ready!" << std::endl;
+        return;
+    }
+
+    std::cout << "Randomizing model position and rotation..." << std::endl;
+
+    // Инициализируем генератор случайных чисел
+    srand(static_cast<unsigned int>(time(nullptr)));
+
+    // Получаем случайную видимую позицию
+    glm::vec3 newPosition = getRandomVisiblePosition();
+
+    // Получаем случайное вращение
+    glm::vec3 newRotation = getRandomRotation();
+
+    // Применяем новые значения
+    modelPosition = newPosition;
+    modelRotation = newRotation;
+
+    // Обновляем uniform данные
+    updateUniformData();
+
+    std::cout << "New position: (" << modelPosition.x << ", "
+              << modelPosition.y << ", " << modelPosition.z << ")" << std::endl;
+    std::cout << "New rotation: (" << modelRotation.x << "°, "
+              << modelRotation.y << "°, " << modelRotation.z << "°)" << std::endl;
 }

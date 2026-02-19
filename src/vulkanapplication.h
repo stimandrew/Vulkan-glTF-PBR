@@ -66,6 +66,11 @@ public:
         bool useDatasetStructure = true;            // Использовать ли структуру папок
     } yoloDataset;
 
+    void randomizeModelPositionAndRotation();
+    bool isPositionVisible(const glm::vec3& pos);
+    glm::vec3 getRandomVisiblePosition();
+    glm::vec3 getRandomRotation();
+
     void createYOLODatasetStructure();              // Создание структуры папок
     std::string getYOLOImagePath(const std::string& baseFilename);   // Получить путь для изображения
     std::string getYOLOLabelPath(const std::string& baseFilename);   // Получить путь для лейбла
