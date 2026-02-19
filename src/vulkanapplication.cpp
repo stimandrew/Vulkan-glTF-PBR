@@ -482,18 +482,24 @@ void VulkanApplication::updateSelectionRect(const glm::vec3& modelPos, const glm
     glm::vec3 translate = -glm::vec3(models.scene.aabb[3][0], models.scene.aabb[3][1], models.scene.aabb[3][2]);
     translate += -0.5f * glm::vec3(models.scene.aabb[0][0], models.scene.aabb[1][1], models.scene.aabb[2][2]);
 
-    // Строим матрицу модели так же, как в updateUniformData
+    // Строим матрицу модели ТОЧНО ТАК ЖЕ, как в updateUniformData
     glm::mat4 modelMatrix = glm::mat4(1.0f);
+
+    // 1. Сначала применяем масштабирование (локальное преобразование)
     modelMatrix = glm::scale(modelMatrix, glm::vec3(scale));
+
+    // 2. Перемещаем модель так, чтобы её центр оказался в начале координат (локальное преобразование)
     modelMatrix = glm::translate(modelMatrix, translate);
 
-    // Применяем поворот вокруг центра модели
+    // 3. Перемещаем модель в мировые координаты (мировое преобразование) - ТОЛЬКО ОДИН РАЗ
+    modelMatrix = glm::translate(modelMatrix, modelPos);
+
+    // 4. ПРИМЕНЯЕМ ПОВОРОТ ПОСЛЕ ПЕРЕМЕЩЕНИЯ В МИРОВЫЕ КООРДИНАТЫ
     modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
     modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
     modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
-    // Применяем позицию модели
-    modelMatrix = glm::translate(modelMatrix, modelPos);
+    // УБИРАЕМ ВТОРОЕ ПРИМЕНЕНИЕ modelPos - оно здесь не нужно!
 
     // Проецируем все углы в экранные координаты
     float minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
@@ -536,13 +542,12 @@ void VulkanApplication::updateSelectionRect(const glm::vec3& modelPos, const glm
         return;
     }
 
-    // ИСПРАВЛЕНИЕ: Обрезаем рамку по границам viewport'а
+    // Обрезаем рамку по границам viewport'а
     float viewportLeft = static_cast<float>(sceneViewport.x);
     float viewportRight = static_cast<float>(sceneViewport.x + sceneViewport.width);
     float viewportTop = static_cast<float>(sceneViewport.y);
     float viewportBottom = static_cast<float>(sceneViewport.y + sceneViewport.height);
 
-    // Принудительно обрезаем координаты рамки по границам viewport'а
     minX = std::max(minX, viewportLeft);
     maxX = std::min(maxX, viewportRight);
     minY = std::max(minY, viewportTop);
@@ -556,10 +561,8 @@ void VulkanApplication::updateSelectionRect(const glm::vec3& modelPos, const glm
     }
 
     // Добавляем отступ
-    const float lineWidth = 1.0f;  // Толщина линии в пикселях
-    const float padding = 1.0f;    // Основной отступ от модели в пикселях
-
-    // Для LINE_LIST топологии, линия рисуется от точки до точки
+    const float lineWidth = 1.0f;
+    const float padding = 1.0f;
     float totalPadding = padding + lineWidth * 0.5f;
 
     selectionRect.left = minX - totalPadding;
@@ -3016,19 +3019,20 @@ void VulkanApplication::updateUniformData()
     // Применяем масштабирование и позицию модели из слайдеров
     shaderValuesScene.model = glm::mat4(1.0f);
 
-    // 1. Сначала масштабируем модель до нужного размера
+    // 1. Сначала применяем масштабирование (локальное преобразование)
     shaderValuesScene.model = glm::scale(shaderValuesScene.model, glm::vec3(scale));
 
-    // 2. Перемещаем модель так, чтобы ее центр оказался в начале координат
+    // 2. Перемещаем модель так, чтобы её центр оказался в начале координат (локальное преобразование)
     shaderValuesScene.model = glm::translate(shaderValuesScene.model, translate);
 
-    // 3. Применяем поворот вокруг центра модели
+    // 3. Перемещаем модель в мировые координаты (мировое преобразование)
+    shaderValuesScene.model = glm::translate(shaderValuesScene.model, modelPosition);
+
+    // 4. ПРИМЕНЯЕМ ПОВОРОТ ПОСЛЕ ПЕРЕМЕЩЕНИЯ В МИРОВЫЕ КООРДИНАТЫ
+    // Это обеспечит вращение вокруг локального центра модели в мировом пространстве
     shaderValuesScene.model = glm::rotate(shaderValuesScene.model, glm::radians(modelRotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
     shaderValuesScene.model = glm::rotate(shaderValuesScene.model, glm::radians(modelRotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
     shaderValuesScene.model = glm::rotate(shaderValuesScene.model, glm::radians(modelRotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
-
-    // 4. Применяем позицию модели из слайдеров (перемещение в мировом пространстве)
-    shaderValuesScene.model = glm::translate(shaderValuesScene.model, modelPosition);
 
     glm::mat4 cv = glm::inverse(camera.matrices.view);
     shaderValuesScene.camPos = glm::vec3(cv[3]);
@@ -3595,13 +3599,14 @@ bool VulkanApplication::isPositionVisible(const glm::vec3& pos)
     glm::vec3 translate = -glm::vec3(models.scene.aabb[3][0], models.scene.aabb[3][1], models.scene.aabb[3][2]);
     translate += -0.5f * glm::vec3(models.scene.aabb[0][0], models.scene.aabb[1][1], models.scene.aabb[2][2]);
 
+    // Строим матрицу модели ТОЧНО ТАК ЖЕ, как в updateUniformData
     glm::mat4 modelMatrix = glm::mat4(1.0f);
     modelMatrix = glm::scale(modelMatrix, glm::vec3(scale));
     modelMatrix = glm::translate(modelMatrix, translate);
+    modelMatrix = glm::translate(modelMatrix, pos);  // Перемещение в мировые координаты
     modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
     modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
     modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
-    modelMatrix = glm::translate(modelMatrix, pos);
 
     // Проецируем центр модели
     glm::vec4 centerPos = modelMatrix * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
