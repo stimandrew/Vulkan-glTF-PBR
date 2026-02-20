@@ -168,6 +168,7 @@ void VulkanApplication::generateNextDatasetImage()
     std::cout << "Captured image " << datasetGen.currentImageIndex
               << " of " << datasetGen.imageCount << std::endl;
 }
+
 int VulkanApplication::getNextScreenshotNumber()
 {
     int maxNumber = 0;
@@ -175,21 +176,54 @@ int VulkanApplication::getNextScreenshotNumber()
 
     // Определяем путь для поиска в зависимости от настроек
     if (yoloDataset.useDatasetStructure) {
-        searchPath = yoloDataset.datasetPath + "/images/";
-        // Создаем структуру папок если нужно
-        createYOLODatasetStructure();
+        if (yoloDataset.useTrainValSplit) {
+            // Ищем в обеих папках train и val
+            searchPath = yoloDataset.datasetPath + "/images/";
+
+            // Сначала проверяем train
+            std::string trainPath = searchPath + "train/";
+            for (int i = 1; i <= 999; i++) {
+                std::stringstream ss;
+                ss << trainPath << "frame_" << std::setw(2) << std::setfill('0') << i << ".png";
+                std::ifstream file(ss.str());
+                if (file.good()) {
+                    maxNumber = std::max(maxNumber, i);
+                }
+            }
+
+            // Затем проверяем val
+            std::string valPath = searchPath + "val/";
+            for (int i = 1; i <= 999; i++) {
+                std::stringstream ss;
+                ss << valPath << "frame_" << std::setw(2) << std::setfill('0') << i << ".png";
+                std::ifstream file(ss.str());
+                if (file.good()) {
+                    maxNumber = std::max(maxNumber, i);
+                }
+            }
+        } else {
+            // Старая структура без разделения
+            searchPath = yoloDataset.datasetPath + "/images/";
+            createYOLODatasetStructure();
+
+            for (int i = 1; i <= 999; i++) {
+                std::stringstream ss;
+                ss << searchPath << "frame_" << std::setw(2) << std::setfill('0') << i << ".png";
+                std::ifstream file(ss.str());
+                if (file.good()) {
+                    maxNumber = i;
+                }
+            }
+        }
     } else {
         searchPath = "";
-    }
-
-    // Проверяем существующие файлы
-    for (int i = 1; i <= 999; i++) {
-        std::stringstream ss;
-        ss << searchPath << "frame_" << std::setw(2) << std::setfill('0') << i << ".png";
-
-        std::ifstream file(ss.str());
-        if (file.good()) {
-            maxNumber = i;
+        for (int i = 1; i <= 999; i++) {
+            std::stringstream ss;
+            ss << "frame_" << std::setw(2) << std::setfill('0') << i << ".png";
+            std::ifstream file(ss.str());
+            if (file.good()) {
+                maxNumber = i;
+            }
         }
     }
 
@@ -263,8 +297,12 @@ void VulkanApplication::ensureDirectoryExists(const std::string& path)
 #else
     command = "mkdir -p \"" + path + "\"";
 #endif
-    system(command.c_str());
+    int result = system(command.c_str());
+    if (result != 0) {
+        std::cerr << "Warning: Failed to create directory: " << path << std::endl;
+    }
 }
+
 
 void VulkanApplication::createYOLODatasetStructure()
 {
@@ -272,15 +310,86 @@ void VulkanApplication::createYOLODatasetStructure()
 
     // Создаем основную структуру папок
     ensureDirectoryExists(yoloDataset.datasetPath);
-    ensureDirectoryExists(yoloDataset.datasetPath + "/images");
-    ensureDirectoryExists(yoloDataset.datasetPath + "/labels");
 
-    std::cout << "YOLO dataset structure created at: " << yoloDataset.datasetPath << std::endl;
-    std::cout << "  - " << yoloDataset.datasetPath << "/images/" << std::endl;
-    std::cout << "  - " << yoloDataset.datasetPath << "/labels/" << std::endl;
+    if (yoloDataset.useTrainValSplit) {
+        // Создаем структуру с train/val разделением
+        ensureDirectoryExists(yoloDataset.datasetPath + "/images");
+        ensureDirectoryExists(yoloDataset.datasetPath + "/images/train");
+        ensureDirectoryExists(yoloDataset.datasetPath + "/images/val");
+        ensureDirectoryExists(yoloDataset.datasetPath + "/labels");
+        ensureDirectoryExists(yoloDataset.datasetPath + "/labels/train");
+        ensureDirectoryExists(yoloDataset.datasetPath + "/labels/val");
+
+        std::cout << "YOLO dataset structure created at: " << yoloDataset.datasetPath << std::endl;
+        std::cout << "  - " << yoloDataset.datasetPath << "/images/train/" << std::endl;
+        std::cout << "  - " << yoloDataset.datasetPath << "/images/val/" << std::endl;
+        std::cout << "  - " << yoloDataset.datasetPath << "/labels/train/" << std::endl;
+        std::cout << "  - " << yoloDataset.datasetPath << "/labels/val/" << std::endl;
+        std::cout << "  Train/val split: " << (yoloDataset.trainSplit * 100) << "% / "
+                  << ((1.0f - yoloDataset.trainSplit) * 100) << "%" << std::endl;
+    } else {
+        // Старая структура без разделения
+        ensureDirectoryExists(yoloDataset.datasetPath + "/images");
+        ensureDirectoryExists(yoloDataset.datasetPath + "/labels");
+
+        std::cout << "YOLO dataset structure created at: " << yoloDataset.datasetPath << std::endl;
+        std::cout << "  - " << yoloDataset.datasetPath << "/images/" << std::endl;
+        std::cout << "  - " << yoloDataset.datasetPath << "/labels/" << std::endl;
+    }
 }
 
+
+bool VulkanApplication::shouldUseTrainSplit()
+{
+    if (!yoloDataset.useTrainValSplit) {
+        return true; // Если разделение не используется, считаем что все в train
+    }
+
+    // Простая рандомизация на основе счетчиков
+    float totalSaved = static_cast<float>(yoloDataset.trainCount + yoloDataset.valCount);
+
+    if (totalSaved == 0.0f) {
+        // Первое сохранение - рандомно определяем категорию
+        return (static_cast<float>(rand()) / RAND_MAX) < yoloDataset.trainSplit;
+    }
+
+    float currentTrainRatio = static_cast<float>(yoloDataset.trainCount) / totalSaved;
+
+    // Если текущее соотношение меньше целевого, сохраняем в train
+    if (currentTrainRatio < yoloDataset.trainSplit) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+void VulkanApplication::updateSplitCounters(bool usedTrain)
+{
+    if (usedTrain) {
+        yoloDataset.trainCount++;
+    } else {
+        yoloDataset.valCount++;
+    }
+}
+
+
+
+
+
 std::string VulkanApplication::getYOLOImagePath(const std::string& baseFilename)
+{
+    // Перегруженный метод для обратной совместимости
+    return getYOLOImagePath(baseFilename, shouldUseTrainSplit());
+}
+
+std::string VulkanApplication::getYOLOLabelPath(const std::string& baseFilename)
+{
+    // Перегруженный метод для обратной совместимости
+    return getYOLOLabelPath(baseFilename, shouldUseTrainSplit());
+}
+
+
+std::string VulkanApplication::getYOLOImagePath(const std::string& baseFilename, bool isTrain)
 {
     if (!yoloDataset.useDatasetStructure) {
         return baseFilename + ".png";  // В текущую папку
@@ -289,11 +398,20 @@ std::string VulkanApplication::getYOLOImagePath(const std::string& baseFilename)
     // Создаем структуру если нужно
     createYOLODatasetStructure();
 
-    // Возвращаем путь в папку images
-    return yoloDataset.datasetPath + "/images/" + baseFilename + ".png";
+    if (yoloDataset.useTrainValSplit) {
+        // Возвращаем путь с учетом train/val разделения
+        if (isTrain) {
+            return yoloDataset.datasetPath + "/images/train/" + baseFilename + ".png";
+        } else {
+            return yoloDataset.datasetPath + "/images/val/" + baseFilename + ".png";
+        }
+    } else {
+        // Старая структура без разделения
+        return yoloDataset.datasetPath + "/images/" + baseFilename + ".png";
+    }
 }
 
-std::string VulkanApplication::getYOLOLabelPath(const std::string& baseFilename)
+std::string VulkanApplication::getYOLOLabelPath(const std::string& baseFilename, bool isTrain)
 {
     if (!yoloDataset.useDatasetStructure) {
         return baseFilename + ".txt";  // В текущую папку
@@ -302,9 +420,20 @@ std::string VulkanApplication::getYOLOLabelPath(const std::string& baseFilename)
     // Создаем структуру если нужно
     createYOLODatasetStructure();
 
-    // Возвращаем путь в папку labels
-    return yoloDataset.datasetPath + "/labels/" + baseFilename + ".txt";
+    if (yoloDataset.useTrainValSplit) {
+        // Возвращаем путь с учетом train/val разделения
+        if (isTrain) {
+            return yoloDataset.datasetPath + "/labels/train/" + baseFilename + ".txt";
+        } else {
+            return yoloDataset.datasetPath + "/labels/val/" + baseFilename + ".txt";
+        }
+    } else {
+        // Старая структура без разделения
+        return yoloDataset.datasetPath + "/labels/" + baseFilename + ".txt";
+    }
 }
+
+
 
 void VulkanApplication::saveYOLOAnnotation(const std::string& filename)
 {
@@ -944,6 +1073,12 @@ void VulkanApplication::takeScreenshot()
 
     std::string baseFilename = generateScreenshotFilename();
 
+    // Определяем, в какую категорию сохранять (train или val)
+    bool useTrain = true;
+    if (yoloDataset.useTrainValSplit) {
+        useTrain = shouldUseTrainSplit();
+    }
+
     // Обновляем рамку выделения с текущей позицией и поворотом
     glm::mat4 viewProj = camera.matrices.perspective * camera.matrices.view;
     updateSelectionRect(modelPosition, viewProj);
@@ -963,14 +1098,37 @@ void VulkanApplication::takeScreenshot()
             }
 
             if (screenshot->isComplete()) {
-                std::string pngFilename = getBackgroundImagePath(baseFilename);
+                std::string pngFilename;
+                std::string labelFilename;
+
+                if (backgroundDataset.useBackgroundFolders) {
+                    pngFilename = getBackgroundImagePath(baseFilename);
+                    labelFilename = getBackgroundLabelPath(baseFilename);
+                } else if (yoloDataset.useDatasetStructure) {
+                    pngFilename = getYOLOImagePath(baseFilename, useTrain);
+                    labelFilename = getYOLOLabelPath(baseFilename, useTrain);
+                } else {
+                    pngFilename = baseFilename + ".png";
+                    labelFilename = baseFilename + ".txt";
+                }
+
                 std::string pngPathWithoutExt = pngFilename.substr(0, pngFilename.length() - 4);
                 screenshot->saveToFile(pngPathWithoutExt);
 
-                saveModelCoordinatesToFile(getBackgroundLabelPath(baseFilename), modelCoords);
-                saveYOLOAnnotationToFile(getBackgroundLabelPath(baseFilename));
+                saveModelCoordinatesToFile(labelFilename, modelCoords);
+                saveYOLOAnnotationToFile(labelFilename);
+
+                // Обновляем счетчики если используется train/val разделение
+                if (yoloDataset.useTrainValSplit) {
+                    updateSplitCounters(useTrain);
+                }
 
                 std::cout << "Screenshot saved to " << pngFilename << std::endl;
+                if (yoloDataset.useTrainValSplit) {
+                    std::cout << "  Category: " << (useTrain ? "train" : "val") << std::endl;
+                    std::cout << "  Train count: " << yoloDataset.trainCount
+                              << ", Val count: " << yoloDataset.valCount << std::endl;
+                }
             } else {
                 std::cerr << "Screenshot capture timed out!" << std::endl;
             }
@@ -1020,16 +1178,43 @@ void VulkanApplication::takeScreenshot()
                     }
                 }
 
-                std::string pngFilename = getBackgroundImagePath(baseFilename);
-                stbi_write_png(pngFilename.c_str(), targetWidth, targetHeight, 4,
-                               resizedPixels.data(), targetWidth * 4);
+                std::string pngFilename;
+                std::string labelFilename;
 
-                saveModelCoordinatesToFile(getBackgroundLabelPath(baseFilename), modelCoords);
-                saveYOLOAnnotationToFile(getBackgroundLabelPath(baseFilename));
+                if (backgroundDataset.useBackgroundFolders) {
+                    pngFilename = getBackgroundImagePath(baseFilename);
+                    labelFilename = getBackgroundLabelPath(baseFilename);
+                } else if (yoloDataset.useDatasetStructure) {
+                    pngFilename = getYOLOImagePath(baseFilename, useTrain);
+                    labelFilename = getYOLOLabelPath(baseFilename, useTrain);
+                } else {
+                    pngFilename = baseFilename + ".png";
+                    labelFilename = baseFilename + ".txt";
+                }
 
-                std::cout << "Screenshot saved to " << pngFilename << std::endl;
-                std::cout << "  Resized from " << sceneViewport.width << "x" << sceneViewport.height
-                          << " to " << targetWidth << "x" << targetHeight << std::endl;
+                int result = stbi_write_png(pngFilename.c_str(), targetWidth, targetHeight, 4,
+                                            resizedPixels.data(), targetWidth * 4);
+
+                if (result) {
+                    saveModelCoordinatesToFile(labelFilename, modelCoords);
+                    saveYOLOAnnotationToFile(labelFilename);
+
+                    // Обновляем счетчики если используется train/val разделение
+                    if (yoloDataset.useTrainValSplit) {
+                        updateSplitCounters(useTrain);
+                    }
+
+                    std::cout << "Screenshot saved to " << pngFilename << std::endl;
+                    std::cout << "  Resized from " << sceneViewport.width << "x" << sceneViewport.height
+                              << " to " << targetWidth << "x" << targetHeight << std::endl;
+                    if (yoloDataset.useTrainValSplit) {
+                        std::cout << "  Category: " << (useTrain ? "train" : "val") << std::endl;
+                        std::cout << "  Train count: " << yoloDataset.trainCount
+                                  << ", Val count: " << yoloDataset.valCount << std::endl;
+                    }
+                } else {
+                    std::cerr << "Failed to save screenshot!" << std::endl;
+                }
             } else {
                 std::cerr << "Screenshot capture timed out!" << std::endl;
             }
@@ -3516,12 +3701,15 @@ void VulkanApplication::updateOverlay()
         const std::vector<std::string> saveModes = {
             "Simple (current folder)",
             "YOLO dataset structure",
+            "YOLO with train/val split",  // Добавлен новый режим
             "Background-based structure"
         };
         static int saveMode = 0;
 
         // Определяем текущий режим на основе настроек
         if (backgroundDataset.useBackgroundFolders) {
+            saveMode = 3;
+        } else if (yoloDataset.useDatasetStructure && yoloDataset.useTrainValSplit) {
             saveMode = 2;
         } else if (yoloDataset.useDatasetStructure) {
             saveMode = 1;
@@ -3535,14 +3723,22 @@ void VulkanApplication::updateOverlay()
             case 0: // Simple mode
                 backgroundDataset.useBackgroundFolders = false;
                 yoloDataset.useDatasetStructure = false;
+                yoloDataset.useTrainValSplit = false;
                 break;
             case 1: // YOLO dataset structure
                 backgroundDataset.useBackgroundFolders = false;
                 yoloDataset.useDatasetStructure = true;
+                yoloDataset.useTrainValSplit = false;
                 break;
-            case 2: // Background-based structure
+            case 2: // YOLO with train/val split
+                backgroundDataset.useBackgroundFolders = false;
+                yoloDataset.useDatasetStructure = true;
+                yoloDataset.useTrainValSplit = true;
+                break;
+            case 3: // Background-based structure
                 backgroundDataset.useBackgroundFolders = true;
                 yoloDataset.useDatasetStructure = false;
+                yoloDataset.useTrainValSplit = false;
                 break;
             }
         }
@@ -3550,7 +3746,8 @@ void VulkanApplication::updateOverlay()
         ImGui::Separator();
 
         // === Настройки в зависимости от режима ===
-        if (saveMode == 1) { // YOLO dataset structure
+        // === Настройки в зависимости от режима ===
+        if (saveMode == 1 || saveMode == 2) { // YOLO dataset structures
             static char datasetPathBuffer[256];
             strncpy(datasetPathBuffer, yoloDataset.datasetPath.c_str(), sizeof(datasetPathBuffer));
             datasetPathBuffer[sizeof(datasetPathBuffer) - 1] = '\0';
@@ -3561,36 +3758,30 @@ void VulkanApplication::updateOverlay()
                 yoloDataset.datasetPath = datasetPathBuffer;
             }
 
+            if (saveMode == 2) { // Train/val split mode
+                ImGui::Text("Train/val split:");
+                ImGui::SameLine();
+                if (ImGui::SliderFloat("##split", &yoloDataset.trainSplit, 0.5f, 0.95f, "%.2f")) {
+                    // Ограничиваем разумными значениями
+                    if (yoloDataset.trainSplit < 0.5f) yoloDataset.trainSplit = 0.5f;
+                    if (yoloDataset.trainSplit > 0.95f) yoloDataset.trainSplit = 0.95f;
+                }
+                ImGui::Text("  Train: %.1f%%, Val: %.1f%%",
+                            yoloDataset.trainSplit * 100.0f,
+                            (1.0f - yoloDataset.trainSplit) * 100.0f);
+            }
+
             if (ui->button("Create YOLO dataset folders")) {
+                // Сбрасываем счетчики при создании новой структуры
+                yoloDataset.trainCount = 0;
+                yoloDataset.valCount = 0;
                 createYOLODatasetStructure();
             }
-        }
-        else if (saveMode == 2) { // Background-based structure
-            static char basePathBuffer[256];
-            strncpy(basePathBuffer, backgroundDataset.basePath.c_str(), sizeof(basePathBuffer));
-            basePathBuffer[sizeof(basePathBuffer) - 1] = '\0';
 
-            ImGui::Text("Base dataset folder:");
-            ImGui::SameLine();
-            if (ImGui::InputText("##basepath", basePathBuffer, sizeof(basePathBuffer))) {
-                backgroundDataset.basePath = basePathBuffer;
-            }
-
-            // Отображаем текущую фоновую подпапку (только для информации)
-            ImGui::Text("Current background folder:");
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "%s",
-                               backgroundDataset.currentBackground.c_str());
-
-            // Кнопка для создания структуры с текущим фоном
-            if (ui->button("Create background folders")) {
-                ensureBackgroundDatasetStructure();
-            }
-
-            // Если фон загружен, показываем информацию
-            if (useStaticBackground && textures.background.image) {
-                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
-                                   "Background folder auto-detected from loaded image");
+            // Показываем текущие счетчики если используется train/val split
+            if (saveMode == 2) {
+                ImGui::Text("Current counts:");
+                ImGui::Text("  Train: %d, Val: %d", yoloDataset.trainCount, yoloDataset.valCount);
             }
         }
 

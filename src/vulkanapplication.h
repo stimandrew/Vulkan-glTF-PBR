@@ -62,8 +62,12 @@ public:
 
     // Структура для управления датасетом YOLO
     struct YOLODataset {
-        std::string datasetPath = "yolo_dataset";  // Основная папка датасета
-        bool useDatasetStructure = true;            // Использовать ли структуру папок
+        std::string datasetPath = "dataset";  // Основная папка датасета
+        bool useDatasetStructure = true;       // Использовать ли структуру папок
+        float trainSplit = 0.8f;               // Процент изображений для train (остальное для val)
+        int trainCount = 0;                     // Счетчик для train
+        int valCount = 0;                       // Счетчик для val
+        bool useTrainValSplit = true;           // Использовать разделение на train/val
     } yoloDataset;
 
     struct BackgroundDataset {
@@ -84,32 +88,45 @@ public:
         float generationDelay = 0.1f;                // Задержка между кадрами (в секундах)
     } datasetGen;
 
-    // Методы для автоматической генерации
+    // Методы для работы с YOLO датасетом
+    void createYOLODatasetStructure();                           // Создание структуры папок с train/val
+    std::string getYOLOImagePath(const std::string& baseFilename);                    // Получить путь для изображения (автовыбор train/val)
+    std::string getYOLOLabelPath(const std::string& baseFilename);                    // Получить путь для лейбла (автовыбор train/val)
+    std::string getYOLOImagePath(const std::string& baseFilename, bool isTrain);     // Получить путь для изображения (явное указание)
+    std::string getYOLOLabelPath(const std::string& baseFilename, bool isTrain);     // Получить путь для лейбла (явное указание)
+    void ensureDirectoryExists(const std::string& path);                              // Проверка/создание папки
+    bool shouldUseTrainSplit();                                                        // Определить, использовать ли train или val
+    void updateSplitCounters(bool usedTrain);                                          // Обновить счетчики после сохранения
+
+    // Методы для автоматической генерации датасета
     void startDatasetGeneration();
     void stopDatasetGeneration();
     void generateNextDatasetImage();
 
-
+    // Методы для работы с фоновыми изображениями
     void ensureBackgroundDatasetStructure();
     std::string getBackgroundImagePath(const std::string& baseFilename);
     std::string getBackgroundLabelPath(const std::string& baseFilename);
     int getNextScreenshotNumberForBackground();
+
+    // Методы для сохранения аннотаций
+    void saveYOLOAnnotation(const std::string& filename);
     void saveYOLOAnnotationToFile(const std::string& filename);
 
+    // Методы для рандомизации позиции и поворота модели
     void randomizeModelPositionAndRotation();
     bool isPositionVisible(const glm::vec3& pos);
     glm::vec3 getRandomVisiblePosition();
     glm::vec3 getRandomRotation();
 
-    void createYOLODatasetStructure();              // Создание структуры папок
-    std::string getYOLOImagePath(const std::string& baseFilename);   // Получить путь для изображения
-    std::string getYOLOLabelPath(const std::string& baseFilename);   // Получить путь для лейбла
-    void ensureDirectoryExists(const std::string& path);             // Проверка/создание папки
-
-    void saveYOLOAnnotation(const std::string& filename);
+    // Методы для работы со скриншотами
     std::string getNextScreenshotFilename();
     int getNextScreenshotNumber();
     void saveModelCoordinatesToFile(const std::string& filename, const glm::vec3& modelPos);
+    void takeScreenshot();
+    std::string generateScreenshotFilename();
+
+    // Методы для работы с рамкой выделения
     bool showSelectionRect = true;
     void createSelectionRectResources();
     void destroySelectionRectResources();
@@ -121,8 +138,6 @@ public:
 
     glm::vec4 calculateBackgroundDisplayRect();
     Screenshot* screenshot = nullptr;
-    void takeScreenshot();
-    std::string generateScreenshotFilename();
 
     struct BackgroundPushConstants {
         glm::vec2 viewportSize;
@@ -320,7 +335,7 @@ public:
 
     void resetCamera();
     void renderNode(vkglTF::Node *node, uint32_t cbIndex, vkglTF::Material::AlphaMode alphaMode);
-    void recordCommandBuffer(); // Убрано override
+    void recordCommandBuffer();
     void createMaterialBuffer();
     void createMeshDataBuffer();
     void updateMeshDataBuffer(uint32_t index);
