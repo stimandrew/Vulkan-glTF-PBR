@@ -14,9 +14,24 @@ VulkanApplication::VulkanApplication() : VulkanExampleBase()
     title = "Vulkan glTF 2.0 PBR - (C) Sascha Willems (www.saschawillems.de)";
     selectionRect.initialized = false;
 
-    // Инициализация YOLO структуры
+    // Инициализация YOLO структуры - ПО УМОЛЧАНИЮ ИСПОЛЬЗУЕМ TRAIN/VAL SPLIT
     yoloDataset.datasetPath = "yolo_dataset";
     yoloDataset.useDatasetStructure = true;
+    yoloDataset.useTrainValSplit = true;      // Включить train/val разделение
+    yoloDataset.trainSplit = 0.8f;             // 80% train, 20% val
+    yoloDataset.trainCount = 0;                 // Счетчики начинаются с 0
+    yoloDataset.valCount = 0;
+
+    // ВАЖНО: Отключаем background folders по умолчанию
+    backgroundDataset.useBackgroundFolders = false;
+    backgroundDataset.basePath = "dataset";
+    backgroundDataset.currentBackground = "without_background";
+
+    // Инициализация фона
+    useStaticBackground = true;
+    backgroundFile = "./../data/backgrounds/background1.jpg";
+    backgroundLoadRequested = true;  // Запросить загрузку фона
+
 #if defined(TINYGLTF_ENABLE_DRACO)
     std::cout << "Draco mesh compression is enabled" << std::endl;
 #endif
@@ -112,6 +127,52 @@ void VulkanApplication::startDatasetGeneration()
     } else if (yoloDataset.useDatasetStructure) {
         createYOLODatasetStructure();
     }
+}
+
+
+void VulkanApplication::loadDefaultBackground()
+{
+    if (!prepared) {
+        std::cout << "Waiting for preparation to load default background..." << std::endl;
+        return;
+    }
+
+    // Пробуем разные варианты путей
+    std::vector<std::string> possiblePaths = {
+        backgroundFile,                                      // ./../data/backgrounds/background1.jpg
+        "data/backgrounds/background1.jpg",                  // data/backgrounds/background1.jpg
+        "./data/backgrounds/background1.jpg",                // ./data/backgrounds/background1.jpg
+        "../data/backgrounds/background1.jpg",                // ../data/backgrounds/background1.jpg
+        "/home/ab/Vulkan-glTF-PBR/data/backgrounds/background1.jpg" // Абсолютный путь
+    };
+
+    std::string loadedPath;
+    for (const auto& path : possiblePaths) {
+        std::ifstream file(path);
+        if (file.good()) {
+            loadedPath = path;
+            std::cout << "Found background at: " << path << std::endl;
+            break;
+        }
+    }
+
+    if (loadedPath.empty()) {
+        std::cerr << "ERROR: Default background file not found in any of the searched paths!" << std::endl;
+        std::cerr << "Searched paths:" << std::endl;
+        for (const auto& path : possiblePaths) {
+            std::cerr << "  - " << path << std::endl;
+        }
+        return;
+    }
+
+    std::cout << "Loading default background from " << loadedPath << std::endl;
+    loadBackground(loadedPath);
+
+    // Важно: пересоздаем ресурсы фона после загрузки
+    if (backgroundRes.initialized) {
+        destroyBackgroundResources();
+    }
+    backgroundRes.needsRecreate = true;
 }
 
 void VulkanApplication::stopDatasetGeneration()
@@ -3701,21 +3762,26 @@ void VulkanApplication::updateOverlay()
         const std::vector<std::string> saveModes = {
             "Simple (current folder)",
             "YOLO dataset structure",
-            "YOLO with train/val split",  // Добавлен новый режим
+            "YOLO with train/val split",
             "Background-based structure"
         };
-        static int saveMode = 0;
 
         // Определяем текущий режим на основе настроек
-        if (backgroundDataset.useBackgroundFolders) {
-            saveMode = 3;
-        } else if (yoloDataset.useDatasetStructure && yoloDataset.useTrainValSplit) {
-            saveMode = 2;
-        } else if (yoloDataset.useDatasetStructure) {
-            saveMode = 1;
+        int saveMode = 0;
+
+        // Важно: проверяем в правильном порядке
+        if (yoloDataset.useDatasetStructure && yoloDataset.useTrainValSplit) {
+            saveMode = 2;  // YOLO with train/val split
+        } else if (yoloDataset.useDatasetStructure && !yoloDataset.useTrainValSplit) {
+            saveMode = 1;  // YOLO dataset structure
+        } else if (backgroundDataset.useBackgroundFolders) {
+            saveMode = 3;  // Background-based structure
         } else {
-            saveMode = 0;
+            saveMode = 0;  // Simple mode
         }
+
+        // Сохраняем предыдущее значение для отслеживания изменений
+        int previousSaveMode = saveMode;
 
         if (ui->combo("Save mode", &saveMode, saveModes)) {
             // Обновляем настройки в соответствии с выбранным режимом
@@ -3731,7 +3797,7 @@ void VulkanApplication::updateOverlay()
                 yoloDataset.useTrainValSplit = false;
                 break;
             case 2: // YOLO with train/val split
-                backgroundDataset.useBackgroundFolders = false;
+                backgroundDataset.useBackgroundFolders = false;  // ВАЖНО: отключаем background
                 yoloDataset.useDatasetStructure = true;
                 yoloDataset.useTrainValSplit = true;
                 break;
@@ -3740,6 +3806,13 @@ void VulkanApplication::updateOverlay()
                 yoloDataset.useDatasetStructure = false;
                 yoloDataset.useTrainValSplit = false;
                 break;
+            }
+
+            // Если изменился режим на train/val split, сбрасываем счетчики
+            if (previousSaveMode != saveMode && saveMode == 2) {
+                yoloDataset.trainCount = 0;
+                yoloDataset.valCount = 0;
+                std::cout << "Switched to YOLO with train/val split mode, counters reset" << std::endl;
             }
         }
 
@@ -4109,6 +4182,44 @@ void VulkanApplication::render()
 {
     if (!prepared) {
         return;
+    }
+
+    // Отложенная загрузка фона - выполняется один раз после полной инициализации
+    if (backgroundLoadRequested) {
+        backgroundLoadRequested = false;
+
+        std::cout << "Loading default background after preparation..." << std::endl;
+
+        // Пробуем разные варианты путей
+        std::vector<std::string> possiblePaths = {
+            backgroundFile,
+            "data/backgrounds/background1.jpg",
+            "./data/backgrounds/background1.jpg",
+            "../data/backgrounds/background1.jpg",
+            "/home/ab/Vulkan-glTF-PBR/data/backgrounds/background1.jpg"
+        };
+
+        std::string loadedPath;
+        for (const auto& path : possiblePaths) {
+            std::ifstream file(path);
+            if (file.good()) {
+                loadedPath = path;
+                std::cout << "Found background at: " << path << std::endl;
+                break;
+            }
+        }
+
+        if (!loadedPath.empty()) {
+            loadBackground(loadedPath);
+
+            // Пересоздаем ресурсы фона
+            if (backgroundRes.initialized) {
+                destroyBackgroundResources();
+            }
+            backgroundRes.needsRecreate = true;
+        } else {
+            std::cerr << "ERROR: Default background file not found!" << std::endl;
+        }
     }
 
     ui->updateTimer -= frameTimer;

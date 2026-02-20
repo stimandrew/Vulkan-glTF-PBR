@@ -39,10 +39,14 @@ private:
         bool needsRecreate = false;
     } backgroundRes;
 
+    bool backgroundLoadRequested = true;
+
     void createBackgroundResources();
     void destroyBackgroundResources();
 
 public:
+
+    void loadDefaultBackground();
     struct SelectionRect {
         VkBuffer vertexBuffer = VK_NULL_HANDLE;
         VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
@@ -80,7 +84,7 @@ public:
         bool randomPositionAndRotation = true;  // Случайное перемещение и вращение
         bool randomPositionOnly = false;         // Только случайное перемещение
         bool randomRotationOnly = false;         // Только случайное вращение
-        int imageCount = 50;                     // Количество изображений для генерации
+        int imageCount = 500;                     // Количество изображений для генерации
         bool isGenerating = false;                // Флаг процесса генерации
         int currentImageIndex = 0;                 // Текущий индекс при генерации
         bool needNextImage = false;                // Флаг необходимости следующего изображения
@@ -127,7 +131,7 @@ public:
     std::string generateScreenshotFilename();
 
     // Методы для работы с рамкой выделения
-    bool showSelectionRect = true;
+    bool showSelectionRect = false;
     void createSelectionRectResources();
     void destroySelectionRectResources();
     void updateSelectionRect(const glm::vec3& modelPos, const glm::mat4& viewProj);
@@ -145,7 +149,7 @@ public:
         glm::vec2 offset;
     } backgroundPushConstants;
     glm::vec3 modelPosition = glm::vec3(0.0f);
-    bool useStaticBackground = false;
+    bool useStaticBackground = true;
     std::string backgroundFile;
 
     // Структура для хранения информации о viewport'ах
@@ -258,7 +262,7 @@ public:
     float animationTimer = 0.0f;
     bool animate = true;
 
-    bool displayBackground = true;
+    bool displayBackground = false;
 
     struct LightSource {
         glm::vec3 color = glm::vec3(1.0f);
