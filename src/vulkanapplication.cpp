@@ -3331,13 +3331,13 @@ void VulkanApplication::updateOverlay()
 
         // Добавляем слайдеры для перемещения модели
         ui->text("Model Position:");
-        if (ui->slider("X Position", &modelPosition.x, -1800.0f, 1800.0f)) {
+        if (ui->slider("X Position", &modelPosition.x, -15.0f, 15.0f)) {
             updateUniformData(); // Обновляем uniform данные при изменении
         }
-        if (ui->slider("Y Position", &modelPosition.y, -1200.0f, 1200.0f)) {
+        if (ui->slider("Y Position", &modelPosition.y, -10.0f, 10.0f)) {
             updateUniformData();
         }
-        if (ui->slider("Z Position", &modelPosition.z, -2000.0f, 200.0f)) {
+        if (ui->slider("Z Position", &modelPosition.z, -25.0f, 2.0f)) {
             updateUniformData();
         }
 
@@ -3844,24 +3844,19 @@ glm::vec3 VulkanApplication::getRandomVisiblePosition()
     const int maxAttempts = 100;
     glm::vec3 randomPos;
 
-    // Определяем диапазон поиска на основе размеров сцены
-    // Используем AABB модели для определения примерного размера
-    float modelWidth = models.scene.aabb[0][0];
-    float modelHeight = models.scene.aabb[1][1];
-    float modelDepth = models.scene.aabb[2][2];
-
-    // Базовый радиус для поиска (можно настроить под вашу сцену)
-    float searchRadius = 1000.0f;
+    // Диапазоны из UI слайдеров
+    const float minX = -15.0f;
+    const float maxX = 15.0f;
+    const float minY = -10.0f;
+    const float maxY = 10.0f;
+    const float minZ = -25.0f;
+    const float maxZ = 2.0f;
 
     for (int attempt = 0; attempt < maxAttempts; attempt++) {
-        // Генерируем случайную позицию в сфере
-        float theta = static_cast<float>(rand()) / RAND_MAX * 2.0f * M_PI;
-        float phi = static_cast<float>(rand()) / RAND_MAX * M_PI - M_PI / 2.0f;
-        float r = static_cast<float>(rand()) / RAND_MAX * searchRadius;
-
-        randomPos.x = r * cos(phi) * cos(theta);
-        randomPos.y = r * sin(phi);
-        randomPos.z = r * cos(phi) * sin(theta);
+        // Генерируем случайную позицию в пределах диапазонов из UI
+        randomPos.x = minX + (static_cast<float>(rand()) / RAND_MAX) * (maxX - minX);
+        randomPos.y = minY + (static_cast<float>(rand()) / RAND_MAX) * (maxY - minY);
+        randomPos.z = minZ + (static_cast<float>(rand()) / RAND_MAX) * (maxZ - minZ);
 
         // Проверяем видимость
         if (isPositionVisible(randomPos)) {
@@ -3869,8 +3864,21 @@ glm::vec3 VulkanApplication::getRandomVisiblePosition()
         }
     }
 
-    // Если не нашли видимую позицию, возвращаем центр
-    std::cout << "Warning: Could not find visible position after " << maxAttempts << " attempts" << std::endl;
+    // Если не нашли видимую позицию, пробуем ещё с большим приоритетом на передний план
+    for (int attempt = 0; attempt < maxAttempts; attempt++) {
+        // Смещаем генерацию ближе к камере (по Z ближе к 0)
+        randomPos.x = minX + (static_cast<float>(rand()) / RAND_MAX) * (maxX - minX);
+        randomPos.y = minY + (static_cast<float>(rand()) / RAND_MAX) * (maxY - minY);
+        randomPos.z = -10.0f + (static_cast<float>(rand()) / RAND_MAX) * 10.0f; // Z от -10 до 0
+
+        if (isPositionVisible(randomPos)) {
+            std::cout << "Found visible position with adjusted Z range" << std::endl;
+            return randomPos;
+        }
+    }
+
+    std::cout << "Warning: Could not find visible position after " << maxAttempts * 2
+              << " attempts, using center position" << std::endl;
     return glm::vec3(0.0f);
 }
 
@@ -3897,10 +3905,14 @@ void VulkanApplication::randomizeModelPositionAndRotation()
     // Инициализируем генератор случайных чисел
     srand(static_cast<unsigned int>(time(nullptr)));
 
-    // Получаем случайную видимую позицию
+    // Сохраняем старые значения для отладки
+    glm::vec3 oldPosition = modelPosition;
+    glm::vec3 oldRotation = modelRotation;
+
+    // Получаем случайную видимую позицию в пределах допустимых диапазонов
     glm::vec3 newPosition = getRandomVisiblePosition();
 
-    // Получаем случайное вращение
+    // Получаем случайное вращение (полный диапазон 360 градусов)
     glm::vec3 newRotation = getRandomRotation();
 
     // Применяем новые значения
@@ -3910,8 +3922,15 @@ void VulkanApplication::randomizeModelPositionAndRotation()
     // Обновляем uniform данные
     updateUniformData();
 
-    std::cout << "New position: (" << modelPosition.x << ", "
-              << modelPosition.y << ", " << modelPosition.z << ")" << std::endl;
-    std::cout << "New rotation: (" << modelRotation.x << "°, "
-              << modelRotation.y << "°, " << modelRotation.z << "°)" << std::endl;
+    std::cout << "Position changed: (" << oldPosition.x << ", " << oldPosition.y << ", " << oldPosition.z << ") -> "
+              << "(" << modelPosition.x << ", " << modelPosition.y << ", " << modelPosition.z << ")" << std::endl;
+    std::cout << "Rotation changed: (" << oldRotation.x << "°, " << oldRotation.y << "°, " << oldRotation.z << "°) -> "
+              << "(" << modelRotation.x << "°, " << modelRotation.y << "°, " << modelRotation.z << "°)" << std::endl;
+
+    // Проверяем видимость и выводим результат
+    if (isPositionVisible(modelPosition)) {
+        std::cout << "New position is VISIBLE" << std::endl;
+    } else {
+        std::cout << "New position is NOT VISIBLE (but within UI constraints)" << std::endl;
+    }
 }
