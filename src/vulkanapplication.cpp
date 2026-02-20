@@ -129,21 +129,18 @@ void VulkanApplication::saveYOLOAnnotation(const std::string& filename)
         return;
     }
 
-    if (!showSelectionRect || (selectionRect.left == 0 && selectionRect.right == 0)) {
-        std::cout << "Selection rect not visible, skipping YOLO annotation" << std::endl;
+    // Всегда получаем актуальные координаты рамки, даже если она скрыта
+    float boxWidth = selectionRect.right - selectionRect.left;
+    float boxHeight = selectionRect.bottom - selectionRect.top;
+
+    // Проверяем, что рамка имеет корректные размеры
+    if (boxWidth < 1.0f || boxHeight < 1.0f) {
+        std::cout << "Bounding box too small, skipping YOLO annotation" << std::endl;
         return;
     }
 
     // Получаем путь для лейбла с учетом структуры папок
     std::string txtFilename = getYOLOLabelPath(filename);
-
-    float boxWidth = selectionRect.right - selectionRect.left;
-    float boxHeight = selectionRect.bottom - selectionRect.top;
-
-    if (boxWidth < 1.0f || boxHeight < 1.0f) {
-        std::cerr << "Invalid bounding box dimensions!" << std::endl;
-        return;
-    }
 
     float centerX = selectionRect.left + boxWidth / 2.0f;
     float centerY = selectionRect.top + boxHeight / 2.0f;
@@ -197,12 +194,10 @@ void VulkanApplication::saveYOLOAnnotation(const std::string& filename)
     for (size_t i = 0; i < existingClasses.size(); i++) {
         if (existingClasses[i] == yoloData.className) {
             classExists = true;
-            // Убеждаемся, что classId соответствует индексу
             if (yoloData.classId != static_cast<int>(i)) {
-                std::cout << "Warning: Class '" << yoloData.className
-                          << "' already exists with ID " << i
-                          << ", but current ID is " << yoloData.classId << std::endl;
-                // Автоматически исправляем classId
+                std::cout << "Info: Class '" << yoloData.className
+                          << "' has ID " << i
+                          << ", updating from " << yoloData.classId << std::endl;
                 yoloData.classId = static_cast<int>(i);
             }
             break;
@@ -212,7 +207,6 @@ void VulkanApplication::saveYOLOAnnotation(const std::string& filename)
     // Если класс новый, добавляем его
     if (!classExists) {
         existingClasses.push_back(yoloData.className);
-        // Обновляем classId на новый индекс
         yoloData.classId = static_cast<int>(existingClasses.size() - 1);
     }
 
@@ -230,7 +224,6 @@ void VulkanApplication::saveYOLOAnnotation(const std::string& filename)
     std::cout << "  Bounding box: [" << normCenterX << ", " << normCenterY
               << ", " << normWidth << ", " << normHeight << "]" << std::endl;
 }
-
 
 void VulkanApplication::createSelectionRectResources() {
     if (selectionRect.initialized) return;
@@ -579,14 +572,15 @@ void VulkanApplication::updateSelectionRect(const glm::vec3& modelPos, const glm
 
 
 void VulkanApplication::renderSelectionRect(VkCommandBuffer commandBuffer) {
+    // Если флажок выключен, НЕ рисуем рамку
     if (!showSelectionRect) return;
+
     if (!selectionRect.initialized) return;
 
     // Проверяем, что рамка имеет корректные размеры
     float width = selectionRect.right - selectionRect.left;
     float height = selectionRect.bottom - selectionRect.top;
 
-    // Добавляем проверку на минимальную ширину/высоту после обрезки
     if (width < 1.0f || height < 1.0f) return;
 
     // Проверяем, что рамка полностью в пределах viewport'а
@@ -776,6 +770,10 @@ void VulkanApplication::takeScreenshot()
     // Генерируем базовое имя файла
     std::string baseFilename = generateScreenshotFilename();
 
+    // ВСЕГДА обновляем координаты рамки перед сохранением
+    glm::mat4 viewProj = camera.matrices.perspective * camera.matrices.view;
+    updateSelectionRect(modelPosition, viewProj);
+
     if (useStaticBackground && textures.background.image) {
         // Если фон включен, захватываем только область, где отображается фон
         glm::vec4 displayRect = calculateBackgroundDisplayRect();
@@ -785,7 +783,6 @@ void VulkanApplication::takeScreenshot()
         uint32_t captureWidth = static_cast<uint32_t>(displayRect.z);
         uint32_t captureHeight = static_cast<uint32_t>(displayRect.w);
 
-        // Проверяем, что область корректа
         if (captureWidth == 0 || captureHeight == 0) {
             std::cerr << "Invalid capture area!" << std::endl;
             return;
@@ -794,26 +791,20 @@ void VulkanApplication::takeScreenshot()
         std::cout << "Capturing background area: " << captureWidth << "x" << captureHeight
                   << " at position (" << captureX << "," << captureY << ")" << std::endl;
 
-        // Захватываем весь вьюпорт
         if (screenshot->capture(srcImage, sceneViewport.width, sceneViewport.height, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)) {
             std::cout << "Screenshot capture started..." << std::endl;
 
-            // Ждем завершения захвата
             while (!screenshot->isComplete()) {
                 vkDeviceWaitIdle(device);
             }
 
-            // Получаем пиксели
             std::vector<uint8_t> fullPixels = screenshot->getPixels();
-
-            // Вырезаем область фона
             std::vector<uint8_t> croppedPixels;
             croppedPixels.resize(captureWidth * captureHeight * 4);
 
             for (uint32_t y = 0; y < captureHeight; y++) {
                 uint32_t srcY = captureY + y;
                 uint32_t dstY = y;
-
                 memcpy(
                     croppedPixels.data() + (dstY * captureWidth * 4),
                     fullPixels.data() + ((srcY * sceneViewport.width + captureX) * 4),
@@ -821,23 +812,17 @@ void VulkanApplication::takeScreenshot()
                     );
             }
 
-            // Для фоновых скриншотов добавляем суффикс
             std::string backgroundBaseFilename = baseFilename + "_background";
-
-            // Получаем путь для изображения
             std::string pngFilename = getYOLOImagePath(backgroundBaseFilename);
 
-            // Сохраняем обрезанное изображение
             stbi_write_png(pngFilename.c_str(), captureWidth, captureHeight, 4,
                            croppedPixels.data(), captureWidth * 4);
 
-            // Сохраняем координаты модели (теперь они попадут в ту же папку что и YOLO)
+            // ВСЕГДА сохраняем координаты модели
             saveModelCoordinatesToFile(backgroundBaseFilename, modelCoords);
 
-            // Сохраняем YOLO аннотацию
-            if (yoloData.saveForYOLO) {
-                saveYOLOAnnotation(backgroundBaseFilename);
-            }
+            // ВСЕГДА сохраняем YOLO аннотацию (проверка saveForYOLO внутри функции)
+            saveYOLOAnnotation(backgroundBaseFilename);
 
             std::cout << "Background screenshot saved to " << pngFilename << std::endl;
             std::cout << "  (original: " << sceneViewport.width << "x" << sceneViewport.height
@@ -852,17 +837,14 @@ void VulkanApplication::takeScreenshot()
                 vkDeviceWaitIdle(device);
             }
 
-            // Получаем путь для изображения
             std::string pngFilename = getYOLOImagePath(baseFilename);
-
-            // Сохраняем PNG в правильную папку
             std::string pngPathWithoutExt = pngFilename.substr(0, pngFilename.length() - 4);
             screenshot->saveToFile(pngPathWithoutExt);
 
-            // Сохраняем координаты модели (теперь они попадут в ту же папку что и YOLO)
+            // ВСЕГДА сохраняем координаты модели
             saveModelCoordinatesToFile(baseFilename, modelCoords);
 
-            // Сохраняем YOLO аннотацию
+            // ВСЕГДА сохраняем YOLO аннотацию (проверка saveForYOLO внутри функции)
             saveYOLOAnnotation(baseFilename);
 
             std::cout << "Scene screenshot saved to " << pngFilename << std::endl;
@@ -3272,12 +3254,12 @@ void VulkanApplication::updateOverlay()
 
     if (ui->header("YOLO")) {
         ui->checkbox("Save YOLO annotations", &yoloData.saveForYOLO);
+        ui->checkbox("Show selection rect", &showSelectionRect);
 
         // Добавляем опцию для структуры папок
         ui->checkbox("Use dataset folders", &yoloDataset.useDatasetStructure);
 
         if (yoloDataset.useDatasetStructure) {
-            // Поле для ввода имени папки датасета
             static char datasetPathBuffer[256];
             strncpy(datasetPathBuffer, yoloDataset.datasetPath.c_str(), sizeof(datasetPathBuffer));
             datasetPathBuffer[sizeof(datasetPathBuffer) - 1] = '\0';
@@ -3288,7 +3270,6 @@ void VulkanApplication::updateOverlay()
                 yoloDataset.datasetPath = datasetPathBuffer;
             }
 
-            // Кнопка для создания структуры
             if (ui->button("Create dataset folders")) {
                 createYOLODatasetStructure();
             }
@@ -3313,11 +3294,11 @@ void VulkanApplication::updateOverlay()
             yoloData.className = classNameBuffer;
         }
 
-        // Отображение информации о текущей рамке
-        if (showSelectionRect && selectionRect.left != 0 && selectionRect.right != 0) {
-            float width = selectionRect.right - selectionRect.left;
-            float height = selectionRect.bottom - selectionRect.top;
+        // Отображение информации о текущей рамке (ВСЕГДА отображаем, даже если рамка скрыта)
+        float width = selectionRect.right - selectionRect.left;
+        float height = selectionRect.bottom - selectionRect.top;
 
+        if (width >= 1.0f && height >= 1.0f) {
             ui->text("Bounding box size: %.1f x %.1f px", width, height);
 
             // YOLO нормализованные координаты
@@ -3330,8 +3311,12 @@ void VulkanApplication::updateOverlay()
             ui->text("  ID %d: %s", yoloData.classId, yoloData.className.c_str());
             ui->text("  center: %.3f, %.3f", normCenterX, normCenterY);
             ui->text("  size: %.3f, %.3f", normWidth, normHeight);
+
+            if (!showSelectionRect) {
+                ui->text("(frame hidden, data still saved)");
+            }
         } else {
-            ui->text("No bounding box visible");
+            ui->text("No bounding box available");
         }
 
         // Информация о следующем файле с учетом структуры
