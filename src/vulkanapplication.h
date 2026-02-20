@@ -72,6 +72,24 @@ public:
         bool useBackgroundFolders = true;               // Использовать ли папки с именами фонов
     } backgroundDataset;
 
+    struct DatasetGenerationSettings {
+        bool randomPositionAndRotation = true;  // Случайное перемещение и вращение
+        bool randomPositionOnly = false;         // Только случайное перемещение
+        bool randomRotationOnly = false;         // Только случайное вращение
+        int imageCount = 50;                     // Количество изображений для генерации
+        bool isGenerating = false;                // Флаг процесса генерации
+        int currentImageIndex = 0;                 // Текущий индекс при генерации
+        bool needNextImage = false;                // Флаг необходимости следующего изображения
+        float generationTimer = 0.0f;               // Таймер для задержки между кадрами
+        float generationDelay = 0.1f;                // Задержка между кадрами (в секундах)
+    } datasetGen;
+
+    // Методы для автоматической генерации
+    void startDatasetGeneration();
+    void stopDatasetGeneration();
+    void generateNextDatasetImage();
+
+
     void ensureBackgroundDatasetStructure();
     std::string getBackgroundImagePath(const std::string& baseFilename);
     std::string getBackgroundLabelPath(const std::string& baseFilename);

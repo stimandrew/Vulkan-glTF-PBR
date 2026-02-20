@@ -69,7 +69,105 @@ VulkanApplication::~VulkanApplication()
     delete screenshot;
 }
 
+void VulkanApplication::startDatasetGeneration()
+{
+    if (datasetGen.isGenerating) {
+        std::cout << "Dataset generation already in progress!" << std::endl;
+        return;
+    }
 
+    // Проверяем, что выбрана хотя бы одна опция
+    if (!datasetGen.randomPositionAndRotation &&
+        !datasetGen.randomPositionOnly &&
+        !datasetGen.randomRotationOnly) {
+        std::cout << "Please select at least one randomization option!" << std::endl;
+        return;
+    }
+
+    // Проверяем корректность количества изображений
+    if (datasetGen.imageCount < 1 || datasetGen.imageCount > 1000) {
+        std::cout << "Image count must be between 1 and 1000!" << std::endl;
+        return;
+    }
+
+    // Инициализируем генератор случайных чисел
+    srand(static_cast<unsigned int>(time(nullptr)));
+
+    datasetGen.isGenerating = true;
+    datasetGen.currentImageIndex = 0;
+    datasetGen.needNextImage = true;  // Запрашиваем первое изображение
+    datasetGen.generationTimer = 0.0f;
+
+    std::cout << "Starting dataset generation..." << std::endl;
+    std::cout << "Mode: ";
+    if (datasetGen.randomPositionAndRotation) std::cout << "Position + Rotation";
+    else if (datasetGen.randomPositionOnly) std::cout << "Position Only";
+    else if (datasetGen.randomRotationOnly) std::cout << "Rotation Only";
+    std::cout << std::endl;
+    std::cout << "Images to generate: " << datasetGen.imageCount << std::endl;
+
+    // Создаем структуру папок если нужно
+    if (backgroundDataset.useBackgroundFolders) {
+        ensureBackgroundDatasetStructure();
+    } else if (yoloDataset.useDatasetStructure) {
+        createYOLODatasetStructure();
+    }
+}
+
+void VulkanApplication::stopDatasetGeneration()
+{
+    if (datasetGen.isGenerating) {
+        datasetGen.isGenerating = false;
+        datasetGen.needNextImage = false;
+        std::cout << "Dataset generation stopped at image "
+                  << datasetGen.currentImageIndex + 1 << std::endl;
+    }
+}
+
+void VulkanApplication::generateNextDatasetImage()
+{
+    if (!datasetGen.isGenerating || !datasetGen.needNextImage) return;
+
+    if (datasetGen.currentImageIndex >= datasetGen.imageCount) {
+        std::cout << "Dataset generation completed! Generated "
+                  << datasetGen.imageCount << " images." << std::endl;
+        datasetGen.isGenerating = false;
+        datasetGen.needNextImage = false;
+        return;
+    }
+
+    // Применяем случайные преобразования в зависимости от выбранного режима
+    if (datasetGen.randomPositionAndRotation) {
+        // Полная рандомизация позиции и поворота
+        randomizeModelPositionAndRotation();
+    } else if (datasetGen.randomPositionOnly) {
+        // Только случайная позиция
+        glm::vec3 oldPosition = modelPosition;
+        modelPosition = getRandomVisiblePosition();
+        updateUniformData();
+        std::cout << "Image " << (datasetGen.currentImageIndex + 1) << ": Position changed: ("
+                  << oldPosition.x << ", " << oldPosition.y << ", " << oldPosition.z << ") -> ("
+                  << modelPosition.x << ", " << modelPosition.y << ", " << modelPosition.z << ")" << std::endl;
+    } else if (datasetGen.randomRotationOnly) {
+        // Только случайный поворот
+        glm::vec3 oldRotation = modelRotation;
+        modelRotation = getRandomRotation();
+        updateUniformData();
+        std::cout << "Image " << (datasetGen.currentImageIndex + 1) << ": Rotation changed: ("
+                  << oldRotation.x << "°, " << oldRotation.y << "°, " << oldRotation.z << "°) -> ("
+                  << modelRotation.x << "°, " << modelRotation.y << "°, " << modelRotation.z << "°)" << std::endl;
+    }
+
+    // Делаем скриншот
+    takeScreenshot();
+
+    datasetGen.currentImageIndex++;
+    datasetGen.needNextImage = false;  // Ждем следующего кадра
+    datasetGen.generationTimer = 0.0f;
+
+    std::cout << "Captured image " << datasetGen.currentImageIndex
+              << " of " << datasetGen.imageCount << std::endl;
+}
 int VulkanApplication::getNextScreenshotNumber()
 {
     int maxNumber = 0;
@@ -832,6 +930,7 @@ void VulkanApplication::takeScreenshot()
         return;
     }
 
+    // Важно: ждем завершения всех операций GPU
     vkDeviceWaitIdle(device);
 
     VkImage srcImage = swapChain.images[imageIndex];
@@ -845,6 +944,7 @@ void VulkanApplication::takeScreenshot()
 
     std::string baseFilename = generateScreenshotFilename();
 
+    // Обновляем рамку выделения с текущей позицией и поворотом
     glm::mat4 viewProj = camera.matrices.perspective * camera.matrices.view;
     updateSelectionRect(modelPosition, viewProj);
 
@@ -855,73 +955,89 @@ void VulkanApplication::takeScreenshot()
     // Если размеры совпадают, используем обычный захват
     if (sceneViewport.width == targetWidth && sceneViewport.height == targetHeight) {
         if (screenshot->capture(srcImage, targetWidth, targetHeight, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)) {
-            while (!screenshot->isComplete()) {
+            // Ждем завершения захвата
+            int timeout = 0;
+            while (!screenshot->isComplete() && timeout < 100) {
                 vkDeviceWaitIdle(device);
+                timeout++;
             }
 
-            std::string pngFilename = getBackgroundImagePath(baseFilename);
-            std::string pngPathWithoutExt = pngFilename.substr(0, pngFilename.length() - 4);
-            screenshot->saveToFile(pngPathWithoutExt);
+            if (screenshot->isComplete()) {
+                std::string pngFilename = getBackgroundImagePath(baseFilename);
+                std::string pngPathWithoutExt = pngFilename.substr(0, pngFilename.length() - 4);
+                screenshot->saveToFile(pngPathWithoutExt);
 
-            saveModelCoordinatesToFile(getBackgroundLabelPath(baseFilename), modelCoords);
-            saveYOLOAnnotationToFile(getBackgroundLabelPath(baseFilename));
+                saveModelCoordinatesToFile(getBackgroundLabelPath(baseFilename), modelCoords);
+                saveYOLOAnnotationToFile(getBackgroundLabelPath(baseFilename));
 
-            std::cout << "Screenshot saved to " << pngFilename << std::endl;
+                std::cout << "Screenshot saved to " << pngFilename << std::endl;
+            } else {
+                std::cerr << "Screenshot capture timed out!" << std::endl;
+            }
         }
     } else {
         // Если размеры отличаются, захватываем и ресайзим
         if (screenshot->capture(srcImage, sceneViewport.width, sceneViewport.height, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)) {
-            while (!screenshot->isComplete()) {
+            // Ждем завершения захвата
+            int timeout = 0;
+            while (!screenshot->isComplete() && timeout < 100) {
                 vkDeviceWaitIdle(device);
+                timeout++;
             }
 
-            std::vector<uint8_t> fullPixels = screenshot->getPixels();
-            std::vector<uint8_t> resizedPixels(targetWidth * targetHeight * 4);
+            if (screenshot->isComplete()) {
+                std::vector<uint8_t> fullPixels = screenshot->getPixels();
+                std::vector<uint8_t> resizedPixels(targetWidth * targetHeight * 4);
 
-            // Билинейная интерполяция
-            float scaleX = static_cast<float>(sceneViewport.width) / targetWidth;
-            float scaleY = static_cast<float>(sceneViewport.height) / targetHeight;
+                // Билинейная интерполяция
+                float scaleX = static_cast<float>(sceneViewport.width) / targetWidth;
+                float scaleY = static_cast<float>(sceneViewport.height) / targetHeight;
 
-#pragma omp parallel for collapse(2) if(targetWidth * targetHeight > 100000)
-            for (uint32_t y = 0; y < targetHeight; y++) {
-                for (uint32_t x = 0; x < targetWidth; x++) {
-                    float srcX = x * scaleX;
-                    float srcY = y * scaleY;
+                for (uint32_t y = 0; y < targetHeight; y++) {
+                    for (uint32_t x = 0; x < targetWidth; x++) {
+                        float srcX = x * scaleX;
+                        float srcY = y * scaleY;
 
-                    uint32_t x1 = static_cast<uint32_t>(srcX);
-                    uint32_t y1 = static_cast<uint32_t>(srcY);
-                    uint32_t x2 = std::min(x1 + 1, sceneViewport.width - 1);
-                    uint32_t y2 = std::min(y1 + 1, sceneViewport.height - 1);
+                        uint32_t x1 = static_cast<uint32_t>(srcX);
+                        uint32_t y1 = static_cast<uint32_t>(srcY);
+                        uint32_t x2 = std::min(x1 + 1, sceneViewport.width - 1);
+                        uint32_t y2 = std::min(y1 + 1, sceneViewport.height - 1);
 
-                    float fx = srcX - x1;
-                    float fy = srcY - y1;
+                        float fx = srcX - x1;
+                        float fy = srcY - y1;
 
-                    for (int c = 0; c < 4; c++) {
-                        uint8_t p00 = fullPixels[(y1 * sceneViewport.width + x1) * 4 + c];
-                        uint8_t p10 = fullPixels[(y1 * sceneViewport.width + x2) * 4 + c];
-                        uint8_t p01 = fullPixels[(y2 * sceneViewport.width + x1) * 4 + c];
-                        uint8_t p11 = fullPixels[(y2 * sceneViewport.width + x2) * 4 + c];
+                        for (int c = 0; c < 4; c++) {
+                            uint8_t p00 = fullPixels[(y1 * sceneViewport.width + x1) * 4 + c];
+                            uint8_t p10 = fullPixels[(y1 * sceneViewport.width + x2) * 4 + c];
+                            uint8_t p01 = fullPixels[(y2 * sceneViewport.width + x1) * 4 + c];
+                            uint8_t p11 = fullPixels[(y2 * sceneViewport.width + x2) * 4 + c];
 
-                        float top = p00 * (1 - fx) + p10 * fx;
-                        float bottom = p01 * (1 - fx) + p11 * fx;
-                        resizedPixels[(y * targetWidth + x) * 4 + c] =
-                            static_cast<uint8_t>(top * (1 - fy) + bottom * fy);
+                            float top = p00 * (1 - fx) + p10 * fx;
+                            float bottom = p01 * (1 - fx) + p11 * fx;
+                            resizedPixels[(y * targetWidth + x) * 4 + c] =
+                                static_cast<uint8_t>(top * (1 - fy) + bottom * fy);
+                        }
                     }
                 }
+
+                std::string pngFilename = getBackgroundImagePath(baseFilename);
+                stbi_write_png(pngFilename.c_str(), targetWidth, targetHeight, 4,
+                               resizedPixels.data(), targetWidth * 4);
+
+                saveModelCoordinatesToFile(getBackgroundLabelPath(baseFilename), modelCoords);
+                saveYOLOAnnotationToFile(getBackgroundLabelPath(baseFilename));
+
+                std::cout << "Screenshot saved to " << pngFilename << std::endl;
+                std::cout << "  Resized from " << sceneViewport.width << "x" << sceneViewport.height
+                          << " to " << targetWidth << "x" << targetHeight << std::endl;
+            } else {
+                std::cerr << "Screenshot capture timed out!" << std::endl;
             }
-
-            std::string pngFilename = getBackgroundImagePath(baseFilename);
-            stbi_write_png(pngFilename.c_str(), targetWidth, targetHeight, 4,
-                           resizedPixels.data(), targetWidth * 4);
-
-            saveModelCoordinatesToFile(getBackgroundLabelPath(baseFilename), modelCoords);
-            saveYOLOAnnotationToFile(getBackgroundLabelPath(baseFilename));
-
-            std::cout << "Screenshot saved to " << pngFilename << std::endl;
-            std::cout << "  Resized from " << sceneViewport.width << "x" << sceneViewport.height
-                      << " to " << targetWidth << "x" << targetHeight << std::endl;
         }
     }
+
+    // Важно: снова ждем завершения всех операций перед следующим кадром
+    vkDeviceWaitIdle(device);
 }
 
 // Новый метод для сохранения YOLO аннотации в указанный файл
@@ -3566,6 +3682,88 @@ void VulkanApplication::updateOverlay()
         }
     }
 
+
+    ImGui::Separator();
+
+    // Новая секция для автоматической генерации датасета
+    if (ui->header("Dataset Generation")) {
+
+        // Режимы рандомизации
+        ui->text("Randomization modes:");
+
+        bool oldAndRotation = datasetGen.randomPositionAndRotation;
+        bool oldPositionOnly = datasetGen.randomPositionOnly;
+        bool oldRotationOnly = datasetGen.randomRotationOnly;
+
+        // Используем radio-кнопки для взаимоисключающего выбора
+        if (ImGui::RadioButton("Position + Rotation", datasetGen.randomPositionAndRotation)) {
+            datasetGen.randomPositionAndRotation = true;
+            datasetGen.randomPositionOnly = false;
+            datasetGen.randomRotationOnly = false;
+        }
+
+        if (ImGui::RadioButton("Position Only", datasetGen.randomPositionOnly)) {
+            datasetGen.randomPositionAndRotation = false;
+            datasetGen.randomPositionOnly = true;
+            datasetGen.randomRotationOnly = false;
+        }
+
+        if (ImGui::RadioButton("Rotation Only", datasetGen.randomRotationOnly)) {
+            datasetGen.randomPositionAndRotation = false;
+            datasetGen.randomPositionOnly = false;
+            datasetGen.randomRotationOnly = true;
+        }
+
+        ImGui::Separator();
+
+        // Количество изображений
+        ui->text("Number of images:");
+        if (ImGui::InputInt("##imagecount", &datasetGen.imageCount, 1, 10)) {
+            if (datasetGen.imageCount < 1) datasetGen.imageCount = 1;
+            if (datasetGen.imageCount > 1000) datasetGen.imageCount = 1000;
+        }
+
+        ImGui::Separator();
+
+        // Кнопки управления генерацией
+        if (!datasetGen.isGenerating) {
+            if (ui->button("Start Generation")) {
+                startDatasetGeneration();
+            }
+        } else {
+            ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f),
+                               "Generating: %d / %d",
+                               datasetGen.currentImageIndex + 1,
+                               datasetGen.imageCount);
+
+            // Прогресс-бар
+            float progress = static_cast<float>(datasetGen.currentImageIndex) /
+                             static_cast<float>(datasetGen.imageCount);
+            ImGui::ProgressBar(progress, ImVec2(-1.0f, 0.0f));
+
+            if (ui->button("Stop Generation")) {
+                stopDatasetGeneration();
+            }
+        }
+
+        ImGui::Separator();
+
+        // Информация о месте сохранения
+        std::string savePathInfo;
+        if (backgroundDataset.useBackgroundFolders) {
+            savePathInfo = backgroundDataset.basePath + "/" +
+                           backgroundDataset.currentBackground + "/";
+        } else if (yoloDataset.useDatasetStructure) {
+            savePathInfo = yoloDataset.datasetPath + "/";
+        } else {
+            savePathInfo = "./";
+        }
+
+        ui->text("Save location:");
+        ui->text("  %s", savePathInfo.c_str());
+        ui->text("  Format: frame_XX.png + .txt");
+    }
+
     if (ui->header("Background")) {
         ui->checkbox("Enable static background", &useStaticBackground);
         if (ui->button("Load JPG background")) {
@@ -3785,6 +3983,18 @@ void VulkanApplication::render()
     }
 
     frameIndex = (frameIndex + 1) % renderAhead;
+
+    // Добавляем логику для автоматической генерации датасета
+    if (datasetGen.isGenerating) {
+        // Обновляем таймер
+        datasetGen.generationTimer += frameTimer;
+
+        // Если пришло время для следующего изображения
+        if (datasetGen.generationTimer >= datasetGen.generationDelay) {
+            datasetGen.needNextImage = true;
+            generateNextDatasetImage();
+        }
+    }
 }
 
 glm::vec3 VulkanApplication::getModelCoordinatesRelativeToScreen()
