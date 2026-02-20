@@ -66,6 +66,18 @@ public:
         bool useDatasetStructure = true;            // Использовать ли структуру папок
     } yoloDataset;
 
+    struct BackgroundDataset {
+        std::string basePath = "dataset";              // Основная папка датасета
+        std::string currentBackground = "without_background"; // Текущий фон
+        bool useBackgroundFolders = true;               // Использовать ли папки с именами фонов
+    } backgroundDataset;
+
+    void ensureBackgroundDatasetStructure();
+    std::string getBackgroundImagePath(const std::string& baseFilename);
+    std::string getBackgroundLabelPath(const std::string& baseFilename);
+    int getNextScreenshotNumberForBackground();
+    void saveYOLOAnnotationToFile(const std::string& filename);
+
     void randomizeModelPositionAndRotation();
     bool isPositionVisible(const glm::vec3& pos);
     glm::vec3 getRandomVisiblePosition();
