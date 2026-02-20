@@ -832,88 +832,29 @@ void VulkanApplication::takeScreenshot()
         return;
     }
 
-    // Приостанавливаем рендеринг на время захвата
     vkDeviceWaitIdle(device);
 
-    // Получаем текущее изображение из swap chain
     VkImage srcImage = swapChain.images[imageIndex];
-
-    // Получаем координаты модели
     glm::vec3 modelCoords = getModelCoordinatesRelativeToScreen();
 
-    // Создаем структуру папок если нужно
     if (backgroundDataset.useBackgroundFolders) {
         ensureBackgroundDatasetStructure();
     } else if (yoloDataset.useDatasetStructure) {
         createYOLODatasetStructure();
     }
 
-    // Генерируем базовое имя файла
     std::string baseFilename = generateScreenshotFilename();
 
-    // ВСЕГДА обновляем координаты рамки перед сохранением
     glm::mat4 viewProj = camera.matrices.perspective * camera.matrices.view;
     updateSelectionRect(modelPosition, viewProj);
 
-    if (useStaticBackground && textures.background.image) {
-        // Если фон включен, захватываем только область, где отображается фон
-        glm::vec4 displayRect = calculateBackgroundDisplayRect();
+    // Целевой размер
+    const uint32_t targetWidth = 1280;
+    const uint32_t targetHeight = 720;
 
-        uint32_t captureX = static_cast<uint32_t>(displayRect.x);
-        uint32_t captureY = static_cast<uint32_t>(displayRect.y);
-        uint32_t captureWidth = static_cast<uint32_t>(displayRect.z);
-        uint32_t captureHeight = static_cast<uint32_t>(displayRect.w);
-
-        if (captureWidth == 0 || captureHeight == 0) {
-            std::cerr << "Invalid capture area!" << std::endl;
-            return;
-        }
-
-        std::cout << "Capturing background area: " << captureWidth << "x" << captureHeight
-                  << " at position (" << captureX << "," << captureY << ")" << std::endl;
-
-        if (screenshot->capture(srcImage, sceneViewport.width, sceneViewport.height, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)) {
-            std::cout << "Screenshot capture started..." << std::endl;
-
-            while (!screenshot->isComplete()) {
-                vkDeviceWaitIdle(device);
-            }
-
-            std::vector<uint8_t> fullPixels = screenshot->getPixels();
-            std::vector<uint8_t> croppedPixels;
-            croppedPixels.resize(captureWidth * captureHeight * 4);
-
-            for (uint32_t y = 0; y < captureHeight; y++) {
-                uint32_t srcY = captureY + y;
-                uint32_t dstY = y;
-                memcpy(
-                    croppedPixels.data() + (dstY * captureWidth * 4),
-                    fullPixels.data() + ((srcY * sceneViewport.width + captureX) * 4),
-                    captureWidth * 4
-                    );
-            }
-
-            // Используем новую функцию для получения пути
-            std::string pngFilename = getBackgroundImagePath(baseFilename);
-
-            // Создаем временный файл без расширения для screenshot->saveToFile
-            std::string tempFilename = pngFilename.substr(0, pngFilename.length() - 4);
-            stbi_write_png(pngFilename.c_str(), captureWidth, captureHeight, 4,
-                           croppedPixels.data(), captureWidth * 4);
-
-            // Сохраняем координаты модели и YOLO аннотации в соответствующие папки
-            saveModelCoordinatesToFile(getBackgroundLabelPath(baseFilename), modelCoords);
-            saveYOLOAnnotationToFile(getBackgroundLabelPath(baseFilename));
-
-            std::cout << "Background screenshot saved to " << pngFilename << std::endl;
-            std::cout << "  (original: " << sceneViewport.width << "x" << sceneViewport.height
-                      << ", cropped: " << captureWidth << "x" << captureHeight << ")" << std::endl;
-        }
-    } else {
-        // Если фона нет, захватываем всю сцену
-        if (screenshot->capture(srcImage, sceneViewport.width, sceneViewport.height, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)) {
-            std::cout << "Screenshot capture started..." << std::endl;
-
+    // Если размеры совпадают, используем обычный захват
+    if (sceneViewport.width == targetWidth && sceneViewport.height == targetHeight) {
+        if (screenshot->capture(srcImage, targetWidth, targetHeight, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)) {
             while (!screenshot->isComplete()) {
                 vkDeviceWaitIdle(device);
             }
@@ -922,11 +863,63 @@ void VulkanApplication::takeScreenshot()
             std::string pngPathWithoutExt = pngFilename.substr(0, pngFilename.length() - 4);
             screenshot->saveToFile(pngPathWithoutExt);
 
-            // Сохраняем координаты модели и YOLO аннотации в соответствующие папки
             saveModelCoordinatesToFile(getBackgroundLabelPath(baseFilename), modelCoords);
             saveYOLOAnnotationToFile(getBackgroundLabelPath(baseFilename));
 
-            std::cout << "Scene screenshot saved to " << pngFilename << std::endl;
+            std::cout << "Screenshot saved to " << pngFilename << std::endl;
+        }
+    } else {
+        // Если размеры отличаются, захватываем и ресайзим
+        if (screenshot->capture(srcImage, sceneViewport.width, sceneViewport.height, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)) {
+            while (!screenshot->isComplete()) {
+                vkDeviceWaitIdle(device);
+            }
+
+            std::vector<uint8_t> fullPixels = screenshot->getPixels();
+            std::vector<uint8_t> resizedPixels(targetWidth * targetHeight * 4);
+
+            // Билинейная интерполяция
+            float scaleX = static_cast<float>(sceneViewport.width) / targetWidth;
+            float scaleY = static_cast<float>(sceneViewport.height) / targetHeight;
+
+#pragma omp parallel for collapse(2) if(targetWidth * targetHeight > 100000)
+            for (uint32_t y = 0; y < targetHeight; y++) {
+                for (uint32_t x = 0; x < targetWidth; x++) {
+                    float srcX = x * scaleX;
+                    float srcY = y * scaleY;
+
+                    uint32_t x1 = static_cast<uint32_t>(srcX);
+                    uint32_t y1 = static_cast<uint32_t>(srcY);
+                    uint32_t x2 = std::min(x1 + 1, sceneViewport.width - 1);
+                    uint32_t y2 = std::min(y1 + 1, sceneViewport.height - 1);
+
+                    float fx = srcX - x1;
+                    float fy = srcY - y1;
+
+                    for (int c = 0; c < 4; c++) {
+                        uint8_t p00 = fullPixels[(y1 * sceneViewport.width + x1) * 4 + c];
+                        uint8_t p10 = fullPixels[(y1 * sceneViewport.width + x2) * 4 + c];
+                        uint8_t p01 = fullPixels[(y2 * sceneViewport.width + x1) * 4 + c];
+                        uint8_t p11 = fullPixels[(y2 * sceneViewport.width + x2) * 4 + c];
+
+                        float top = p00 * (1 - fx) + p10 * fx;
+                        float bottom = p01 * (1 - fx) + p11 * fx;
+                        resizedPixels[(y * targetWidth + x) * 4 + c] =
+                            static_cast<uint8_t>(top * (1 - fy) + bottom * fy);
+                    }
+                }
+            }
+
+            std::string pngFilename = getBackgroundImagePath(baseFilename);
+            stbi_write_png(pngFilename.c_str(), targetWidth, targetHeight, 4,
+                           resizedPixels.data(), targetWidth * 4);
+
+            saveModelCoordinatesToFile(getBackgroundLabelPath(baseFilename), modelCoords);
+            saveYOLOAnnotationToFile(getBackgroundLabelPath(baseFilename));
+
+            std::cout << "Screenshot saved to " << pngFilename << std::endl;
+            std::cout << "  Resized from " << sceneViewport.width << "x" << sceneViewport.height
+                      << " to " << targetWidth << "x" << targetHeight << std::endl;
         }
     }
 }
