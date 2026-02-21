@@ -18,7 +18,7 @@ VulkanApplication::VulkanApplication() : VulkanExampleBase()
     yoloDataset.datasetPath = "yolo_dataset";
     yoloDataset.useDatasetStructure = true;
     yoloDataset.useTrainValSplit = true;      // Включить train/val разделение
-    yoloDataset.trainSplit = 0.8f;             // 80% train, 20% val
+    yoloDataset.trainSplit = 0.9f;             // 90% train, 10% val
     yoloDataset.trainCount = 0;                 // Счетчики начинаются с 0
     yoloDataset.valCount = 0;
 
@@ -100,7 +100,7 @@ void VulkanApplication::startDatasetGeneration()
     }
 
     // Проверяем корректность количества изображений
-    if (datasetGen.imageCount < 1 || datasetGen.imageCount > 1000) {
+    if (datasetGen.imageCount < 1 || datasetGen.imageCount > 100000) {
         std::cout << "Image count must be between 1 and 1000!" << std::endl;
         return;
     }
@@ -126,6 +126,41 @@ void VulkanApplication::startDatasetGeneration()
         ensureBackgroundDatasetStructure();
     } else if (yoloDataset.useDatasetStructure) {
         createYOLODatasetStructure();
+    }
+}
+
+
+void VulkanApplication::loadLastImageNumber()
+{
+    std::string counterFile;
+    if (yoloDataset.useDatasetStructure) {
+        counterFile = yoloDataset.datasetPath + "/last_image.txt";
+    } else {
+        counterFile = "last_image.txt";
+    }
+
+    std::ifstream file(counterFile);
+    if (file.is_open()) {
+        file >> yoloDataset.lastImageNumber;
+        file.close();
+    } else {
+        yoloDataset.lastImageNumber = 0;
+    }
+}
+
+void VulkanApplication::saveLastImageNumber()
+{
+    std::string counterFile;
+    if (yoloDataset.useDatasetStructure) {
+        counterFile = yoloDataset.datasetPath + "/last_image.txt";
+    } else {
+        counterFile = "last_image.txt";
+    }
+
+    std::ofstream file(counterFile);
+    if (file.is_open()) {
+        file << yoloDataset.lastImageNumber;
+        file.close();
     }
 }
 
@@ -235,31 +270,32 @@ int VulkanApplication::getNextScreenshotNumber()
     int maxNumber = 0;
     std::string searchPath;
 
-    // Определяем путь для поиска в зависимости от настроек
     if (yoloDataset.useDatasetStructure) {
         if (yoloDataset.useTrainValSplit) {
             // Ищем в обеих папках train и val
             searchPath = yoloDataset.datasetPath + "/images/";
 
-            // Сначала проверяем train
+            // Проверяем train
             std::string trainPath = searchPath + "train/";
-            for (int i = 1; i <= 999; i++) {
-                std::stringstream ss;
-                ss << trainPath << "frame_" << std::setw(2) << std::setfill('0') << i << ".png";
-                std::ifstream file(ss.str());
-                if (file.good()) {
-                    maxNumber = std::max(maxNumber, i);
-                }
-            }
-
-            // Затем проверяем val
             std::string valPath = searchPath + "val/";
-            for (int i = 1; i <= 999; i++) {
+
+            // Увеличиваем лимит до 999999 (можно изменить на нужное число)
+            const int MAX_SEARCH = 999999;
+
+            for (int i = 1; i <= MAX_SEARCH; i++) {
                 std::stringstream ss;
-                ss << valPath << "frame_" << std::setw(2) << std::setfill('0') << i << ".png";
+                ss << trainPath << "frame_" << std::setw(6) << std::setfill('0') << i << ".png";
                 std::ifstream file(ss.str());
                 if (file.good()) {
                     maxNumber = std::max(maxNumber, i);
+                } else {
+                    // Проверяем val
+                    ss.str("");
+                    ss << valPath << "frame_" << std::setw(6) << std::setfill('0') << i << ".png";
+                    std::ifstream valFile(ss.str());
+                    if (valFile.good()) {
+                        maxNumber = std::max(maxNumber, i);
+                    }
                 }
             }
         } else {
@@ -267,9 +303,10 @@ int VulkanApplication::getNextScreenshotNumber()
             searchPath = yoloDataset.datasetPath + "/images/";
             createYOLODatasetStructure();
 
-            for (int i = 1; i <= 999; i++) {
+            const int MAX_SEARCH = 999999;
+            for (int i = 1; i <= MAX_SEARCH; i++) {
                 std::stringstream ss;
-                ss << searchPath << "frame_" << std::setw(2) << std::setfill('0') << i << ".png";
+                ss << searchPath << "frame_" << std::setw(6) << std::setfill('0') << i << ".png";
                 std::ifstream file(ss.str());
                 if (file.good()) {
                     maxNumber = i;
@@ -278,9 +315,10 @@ int VulkanApplication::getNextScreenshotNumber()
         }
     } else {
         searchPath = "";
-        for (int i = 1; i <= 999; i++) {
+        const int MAX_SEARCH = 999999;
+        for (int i = 1; i <= MAX_SEARCH; i++) {
             std::stringstream ss;
-            ss << "frame_" << std::setw(2) << std::setfill('0') << i << ".png";
+            ss << "frame_" << std::setw(6) << std::setfill('0') << i << ".png";
             std::ifstream file(ss.str());
             if (file.good()) {
                 maxNumber = i;
@@ -1063,14 +1101,17 @@ int VulkanApplication::getNextScreenshotNumberForBackground()
         searchPath = "";
     }
 
-    // Проверяем существующие файлы
-    for (int i = 1; i <= 999; i++) {
+    const int MAX_SEARCH = 999999; // Можно увеличить до нужного числа
+
+    for (int i = 1; i <= MAX_SEARCH; i++) {
         std::stringstream ss;
-        ss << searchPath << "frame_" << std::setw(2) << std::setfill('0') << i << ".png";
+        ss << searchPath << "frame_" << std::setw(6) << std::setfill('0') << i << ".png";
 
         std::ifstream file(ss.str());
         if (file.good()) {
             maxNumber = i;
+        } else {
+            break; // Если нашли пропуск, останавливаемся
         }
     }
 
@@ -1080,19 +1121,17 @@ int VulkanApplication::getNextScreenshotNumberForBackground()
 
 std::string VulkanApplication::generateScreenshotFilename()
 {
-    int nextNumber;
-
-    if (backgroundDataset.useBackgroundFolders) {
-        nextNumber = getNextScreenshotNumberForBackground();
-    } else {
-        nextNumber = getNextScreenshotNumber();
-    }
+    loadLastImageNumber(); // Загружаем последний номер
+    yoloDataset.lastImageNumber++; // Увеличиваем
 
     std::stringstream ss;
-    ss << "frame_" << std::setw(2) << std::setfill('0') << nextNumber;
+    ss << "frame_" << std::setw(6) << std::setfill('0') << yoloDataset.lastImageNumber;
+
+    saveLastImageNumber(); // Сохраняем обновленный номер
 
     return ss.str();
 }
+
 
 
 void VulkanApplication::saveModelCoordinatesToFile(const std::string& filename, const glm::vec3& modelPos)
@@ -3984,7 +4023,7 @@ void VulkanApplication::updateOverlay()
         ui->text("Number of images:");
         if (ImGui::InputInt("##imagecount", &datasetGen.imageCount, 1, 10)) {
             if (datasetGen.imageCount < 1) datasetGen.imageCount = 1;
-            if (datasetGen.imageCount > 1000) datasetGen.imageCount = 1000;
+            if (datasetGen.imageCount > 300000) datasetGen.imageCount = 300000;
         }
 
         ImGui::Separator();

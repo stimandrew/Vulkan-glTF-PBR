@@ -46,6 +46,9 @@ private:
 
 public:
 
+    void loadLastImageNumber();
+    void saveLastImageNumber();
+
     void loadDefaultBackground();
     struct SelectionRect {
         VkBuffer vertexBuffer = VK_NULL_HANDLE;
@@ -66,12 +69,13 @@ public:
 
     // Структура для управления датасетом YOLO
     struct YOLODataset {
-        std::string datasetPath = "dataset";  // Основная папка датасета
-        bool useDatasetStructure = true;       // Использовать ли структуру папок
-        float trainSplit = 0.8f;               // Процент изображений для train (остальное для val)
-        int trainCount = 0;                     // Счетчик для train
-        int valCount = 0;                       // Счетчик для val
-        bool useTrainValSplit = true;           // Использовать разделение на train/val
+        std::string datasetPath = "dataset";
+        bool useDatasetStructure = true;
+        float trainSplit = 0.9f;
+        int trainCount = 0;
+        int valCount = 0;
+        bool useTrainValSplit = true;
+        int lastImageNumber = 0; // Добавить это поле
     } yoloDataset;
 
     struct BackgroundDataset {
@@ -84,7 +88,7 @@ public:
         bool randomPositionAndRotation = true;  // Случайное перемещение и вращение
         bool randomPositionOnly = false;         // Только случайное перемещение
         bool randomRotationOnly = false;         // Только случайное вращение
-        int imageCount = 500;                     // Количество изображений для генерации
+        int imageCount = 50000;                     // Количество изображений для генерации
         bool isGenerating = false;                // Флаг процесса генерации
         int currentImageIndex = 0;                 // Текущий индекс при генерации
         bool needNextImage = false;                // Флаг необходимости следующего изображения
