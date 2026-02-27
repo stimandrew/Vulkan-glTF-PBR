@@ -18,7 +18,7 @@ VulkanApplication::VulkanApplication() : VulkanExampleBase()
     yoloDataset.datasetPath = "yolo_dataset";
     yoloDataset.useDatasetStructure = true;
     yoloDataset.useTrainValSplit = true;      // Включить train/val разделение
-    yoloDataset.trainSplit = 0.9f;             // 90% train, 10% val
+    yoloDataset.trainSplit = 0.95f;             // 90% train, 10% val
     yoloDataset.trainCount = 0;                 // Счетчики начинаются с 0
     yoloDataset.valCount = 0;
 
@@ -100,8 +100,8 @@ void VulkanApplication::startDatasetGeneration()
     }
 
     // Проверяем корректность количества изображений
-    if (datasetGen.imageCount < 1 || datasetGen.imageCount > 100000) {
-        std::cout << "Image count must be between 1 and 1000!" << std::endl;
+    if (datasetGen.imageCount < 1 || datasetGen.imageCount > 500000) {
+        std::cout << "Image count must be between 1 and 500000!" << std::endl;
         return;
     }
 

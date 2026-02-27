@@ -55,8 +55,8 @@ public:
     // Структура для настроек разрешения скриншотов
     struct ScreenshotResolution {
         bool resizeEnabled = true;           // Включено ли изменение размера
-        uint32_t selectedWidth = 1280;        // Выбранная ширина
-        uint32_t selectedHeight = 720;        // Выбранная высота
+        uint32_t selectedWidth = 640;        // Выбранная ширина
+        uint32_t selectedHeight = 360;        // Выбранная высота
 
         // Предопределенные разрешения
         std::vector<std::pair<uint32_t, uint32_t>> resolutions = {
@@ -67,7 +67,7 @@ public:
             {3840, 2160}
         };
 
-        int selectedIndex = 1; // Индекс выбранного разрешения (по умолчанию 1280x720)
+        int selectedIndex = 0; // Индекс выбранного разрешения (по умолчанию 640x360)
     } screenshotResolutions;
 
     void loadLastImageNumber();
@@ -95,7 +95,7 @@ public:
     struct YOLODataset {
         std::string datasetPath = "dataset";
         bool useDatasetStructure = true;
-        float trainSplit = 0.9f;
+        float trainSplit = 0.95f;
         int trainCount = 0;
         int valCount = 0;
         bool useTrainValSplit = true;
@@ -112,12 +112,12 @@ public:
         bool randomPositionAndRotation = true;  // Случайное перемещение и вращение
         bool randomPositionOnly = false;         // Только случайное перемещение
         bool randomRotationOnly = false;         // Только случайное вращение
-        int imageCount = 50000;                     // Количество изображений для генерации
+        int imageCount = 300000;                     // Количество изображений для генерации
         bool isGenerating = false;                // Флаг процесса генерации
         int currentImageIndex = 0;                 // Текущий индекс при генерации
         bool needNextImage = false;                // Флаг необходимости следующего изображения
         float generationTimer = 0.0f;               // Таймер для задержки между кадрами
-        float generationDelay = 0.1f;                // Задержка между кадрами (в секундах)
+        float generationDelay = 1.0f;                // Задержка между кадрами (в секундах)
     } datasetGen;
 
     // Методы для работы с YOLO датасетом
