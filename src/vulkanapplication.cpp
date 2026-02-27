@@ -1035,6 +1035,7 @@ void VulkanApplication::renderSelectionRect(VkCommandBuffer commandBuffer) {
 glm::vec4 VulkanApplication::calculateBackgroundDisplayRect()
 {
     if (!useStaticBackground || !textures.background.image) {
+        captureArea.isValid = false;
         return glm::vec4(0, 0, sceneViewport.width, sceneViewport.height);
     }
 
@@ -1079,11 +1080,19 @@ glm::vec4 VulkanApplication::calculateBackgroundDisplayRect()
         finalHeight = sceneViewport.height - finalY;
     }
 
-    // std::cout << "Background display rect: x=" << finalX << ", y=" << finalY
-    //           << ", w=" << finalWidth << ", h=" << finalHeight << std::endl;
+    // Сохраняем область захвата для использования в скриншотах
+    captureArea.x = finalX;
+    captureArea.y = finalY;
+    captureArea.width = finalWidth;
+    captureArea.height = finalHeight;
+    captureArea.isValid = true;
+
+    std::cout << "Background display rect: x=" << finalX << ", y=" << finalY
+               << ", w=" << finalWidth << ", h=" << finalHeight << std::endl;
 
     return glm::vec4(finalX, finalY, finalWidth, finalHeight);
 }
+
 
 int VulkanApplication::getNextScreenshotNumberForBackground()
 {
@@ -1183,38 +1192,118 @@ void VulkanApplication::takeScreenshot()
     glm::mat4 viewProj = camera.matrices.perspective * camera.matrices.view;
     updateSelectionRect(modelPosition, viewProj);
 
-    // Целевой размер
-    const uint32_t targetWidth = 1280;
-    const uint32_t targetHeight = 720;
+    // Получаем область для захвата
+    uint32_t captureWidth, captureHeight;
+    uint32_t captureX, captureY;
 
-    // Если размеры совпадают, используем обычный захват
-    if (sceneViewport.width == targetWidth && sceneViewport.height == targetHeight) {
-        if (screenshot->capture(srcImage, targetWidth, targetHeight, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)) {
-            // Ждем завершения захвата
-            int timeout = 0;
-            while (!screenshot->isComplete() && timeout < 100) {
-                vkDeviceWaitIdle(device);
-                timeout++;
-            }
+    if (useStaticBackground && textures.background.image && captureArea.isValid) {
+        // Используем сохраненную область фона
+        captureX = captureArea.x;
+        captureY = captureArea.y;
+        captureWidth = captureArea.width;
+        captureHeight = captureArea.height;
 
-            if (screenshot->isComplete()) {
-                std::string pngFilename;
-                std::string labelFilename;
+        std::cout << "Capturing background area: " << captureWidth << "x" << captureHeight
+                  << " at position (" << captureX << ", " << captureY << ")" << std::endl;
+    } else {
+        // Без фона - весь вьюпорт
+        captureX = sceneViewport.x;
+        captureY = sceneViewport.y;
+        captureWidth = sceneViewport.width;
+        captureHeight = sceneViewport.height;
+        std::cout << "Capturing full viewport: " << captureWidth << "x" << captureHeight << std::endl;
+    }
 
-                if (backgroundDataset.useBackgroundFolders) {
-                    pngFilename = getBackgroundImagePath(baseFilename);
-                    labelFilename = getBackgroundLabelPath(baseFilename);
-                } else if (yoloDataset.useDatasetStructure) {
-                    pngFilename = getYOLOImagePath(baseFilename, useTrain);
-                    labelFilename = getYOLOLabelPath(baseFilename, useTrain);
-                } else {
-                    pngFilename = baseFilename + ".png";
-                    labelFilename = baseFilename + ".txt";
+    // Проверяем, нужно ли ресайзить
+    bool needsResize = (captureWidth != screenshotResolutions.selectedWidth ||
+                        captureHeight != screenshotResolutions.selectedHeight);
+
+    // Захватываем изображение с указанием области
+    if (screenshot->capture(srcImage, captureX, captureY, captureWidth, captureHeight, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)) {
+        // Ждем завершения захвата
+        int timeout = 0;
+        while (!screenshot->isComplete() && timeout < 100) {
+            vkDeviceWaitIdle(device);
+            timeout++;
+        }
+
+        if (screenshot->isComplete()) {
+            std::vector<uint8_t> finalPixels;
+            uint32_t finalWidth, finalHeight;
+
+            // Получаем пиксели
+            std::vector<uint8_t> fullPixels = screenshot->getPixels();
+
+            // Проверяем размер полученных пикселей
+            std::cout << "Captured pixels size: " << fullPixels.size() << " bytes" << std::endl;
+            std::cout << "Expected: " << captureWidth * captureHeight * 4 << " bytes" << std::endl;
+
+            if (needsResize && screenshotResolutions.resizeEnabled) {
+                // Ресайзим до выбранного разрешения
+                finalWidth = screenshotResolutions.selectedWidth;
+                finalHeight = screenshotResolutions.selectedHeight;
+                finalPixels.resize(finalWidth * finalHeight * 4);
+
+                // Билинейная интерполяция
+                float scaleX = static_cast<float>(captureWidth) / finalWidth;
+                float scaleY = static_cast<float>(captureHeight) / finalHeight;
+
+                for (uint32_t y = 0; y < finalHeight; y++) {
+                    for (uint32_t x = 0; x < finalWidth; x++) {
+                        float srcX = x * scaleX;
+                        float srcY = y * scaleY;
+
+                        uint32_t x1 = static_cast<uint32_t>(srcX);
+                        uint32_t y1 = static_cast<uint32_t>(srcY);
+                        uint32_t x2 = std::min(x1 + 1, captureWidth - 1);
+                        uint32_t y2 = std::min(y1 + 1, captureHeight - 1);
+
+                        float fx = srcX - x1;
+                        float fy = srcY - y1;
+
+                        for (int c = 0; c < 4; c++) {
+                            uint8_t p00 = fullPixels[(y1 * captureWidth + x1) * 4 + c];
+                            uint8_t p10 = fullPixels[(y1 * captureWidth + x2) * 4 + c];
+                            uint8_t p01 = fullPixels[(y2 * captureWidth + x1) * 4 + c];
+                            uint8_t p11 = fullPixels[(y2 * captureWidth + x2) * 4 + c];
+
+                            float top = p00 * (1 - fx) + p10 * fx;
+                            float bottom = p01 * (1 - fx) + p11 * fx;
+                            finalPixels[(y * finalWidth + x) * 4 + c] =
+                                static_cast<uint8_t>(top * (1 - fy) + bottom * fy);
+                        }
+                    }
                 }
 
-                std::string pngPathWithoutExt = pngFilename.substr(0, pngFilename.length() - 4);
-                screenshot->saveToFile(pngPathWithoutExt);
+                std::cout << "Resized from " << captureWidth << "x" << captureHeight
+                          << " to " << finalWidth << "x" << finalHeight << std::endl;
+            } else {
+                // Используем оригинальный размер
+                finalPixels = fullPixels;
+                finalWidth = captureWidth;
+                finalHeight = captureHeight;
+            }
 
+            // Сохраняем PNG
+            std::string pngFilename;
+            std::string labelFilename;
+
+            if (backgroundDataset.useBackgroundFolders) {
+                pngFilename = getBackgroundImagePath(baseFilename);
+                labelFilename = getBackgroundLabelPath(baseFilename);
+            } else if (yoloDataset.useDatasetStructure) {
+                pngFilename = getYOLOImagePath(baseFilename, useTrain);
+                labelFilename = getYOLOLabelPath(baseFilename, useTrain);
+            } else {
+                pngFilename = baseFilename + ".png";
+                labelFilename = baseFilename + ".txt";
+            }
+
+            // Сохраняем PNG
+            int result = stbi_write_png(pngFilename.c_str(), finalWidth, finalHeight, 4,
+                                        finalPixels.data(), finalWidth * 4);
+
+            if (result) {
                 saveModelCoordinatesToFile(labelFilename, modelCoords);
                 saveYOLOAnnotationToFile(labelFilename);
 
@@ -1224,100 +1313,18 @@ void VulkanApplication::takeScreenshot()
                 }
 
                 std::cout << "Screenshot saved to " << pngFilename << std::endl;
+                std::cout << "  Size: " << finalWidth << "x" << finalHeight << std::endl;
+
                 if (yoloDataset.useTrainValSplit) {
                     std::cout << "  Category: " << (useTrain ? "train" : "val") << std::endl;
                     std::cout << "  Train count: " << yoloDataset.trainCount
                               << ", Val count: " << yoloDataset.valCount << std::endl;
                 }
             } else {
-                std::cerr << "Screenshot capture timed out!" << std::endl;
+                std::cerr << "Failed to save screenshot!" << std::endl;
             }
-        }
-    } else {
-        // Если размеры отличаются, захватываем и ресайзим
-        if (screenshot->capture(srcImage, sceneViewport.width, sceneViewport.height, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)) {
-            // Ждем завершения захвата
-            int timeout = 0;
-            while (!screenshot->isComplete() && timeout < 100) {
-                vkDeviceWaitIdle(device);
-                timeout++;
-            }
-
-            if (screenshot->isComplete()) {
-                std::vector<uint8_t> fullPixels = screenshot->getPixels();
-                std::vector<uint8_t> resizedPixels(targetWidth * targetHeight * 4);
-
-                // Билинейная интерполяция
-                float scaleX = static_cast<float>(sceneViewport.width) / targetWidth;
-                float scaleY = static_cast<float>(sceneViewport.height) / targetHeight;
-
-                for (uint32_t y = 0; y < targetHeight; y++) {
-                    for (uint32_t x = 0; x < targetWidth; x++) {
-                        float srcX = x * scaleX;
-                        float srcY = y * scaleY;
-
-                        uint32_t x1 = static_cast<uint32_t>(srcX);
-                        uint32_t y1 = static_cast<uint32_t>(srcY);
-                        uint32_t x2 = std::min(x1 + 1, sceneViewport.width - 1);
-                        uint32_t y2 = std::min(y1 + 1, sceneViewport.height - 1);
-
-                        float fx = srcX - x1;
-                        float fy = srcY - y1;
-
-                        for (int c = 0; c < 4; c++) {
-                            uint8_t p00 = fullPixels[(y1 * sceneViewport.width + x1) * 4 + c];
-                            uint8_t p10 = fullPixels[(y1 * sceneViewport.width + x2) * 4 + c];
-                            uint8_t p01 = fullPixels[(y2 * sceneViewport.width + x1) * 4 + c];
-                            uint8_t p11 = fullPixels[(y2 * sceneViewport.width + x2) * 4 + c];
-
-                            float top = p00 * (1 - fx) + p10 * fx;
-                            float bottom = p01 * (1 - fx) + p11 * fx;
-                            resizedPixels[(y * targetWidth + x) * 4 + c] =
-                                static_cast<uint8_t>(top * (1 - fy) + bottom * fy);
-                        }
-                    }
-                }
-
-                std::string pngFilename;
-                std::string labelFilename;
-
-                if (backgroundDataset.useBackgroundFolders) {
-                    pngFilename = getBackgroundImagePath(baseFilename);
-                    labelFilename = getBackgroundLabelPath(baseFilename);
-                } else if (yoloDataset.useDatasetStructure) {
-                    pngFilename = getYOLOImagePath(baseFilename, useTrain);
-                    labelFilename = getYOLOLabelPath(baseFilename, useTrain);
-                } else {
-                    pngFilename = baseFilename + ".png";
-                    labelFilename = baseFilename + ".txt";
-                }
-
-                int result = stbi_write_png(pngFilename.c_str(), targetWidth, targetHeight, 4,
-                                            resizedPixels.data(), targetWidth * 4);
-
-                if (result) {
-                    saveModelCoordinatesToFile(labelFilename, modelCoords);
-                    saveYOLOAnnotationToFile(labelFilename);
-
-                    // Обновляем счетчики если используется train/val разделение
-                    if (yoloDataset.useTrainValSplit) {
-                        updateSplitCounters(useTrain);
-                    }
-
-                    std::cout << "Screenshot saved to " << pngFilename << std::endl;
-                    std::cout << "  Resized from " << sceneViewport.width << "x" << sceneViewport.height
-                              << " to " << targetWidth << "x" << targetHeight << std::endl;
-                    if (yoloDataset.useTrainValSplit) {
-                        std::cout << "  Category: " << (useTrain ? "train" : "val") << std::endl;
-                        std::cout << "  Train count: " << yoloDataset.trainCount
-                                  << ", Val count: " << yoloDataset.valCount << std::endl;
-                    }
-                } else {
-                    std::cerr << "Failed to save screenshot!" << std::endl;
-                }
-            } else {
-                std::cerr << "Screenshot capture timed out!" << std::endl;
-            }
+        } else {
+            std::cerr << "Screenshot capture timed out!" << std::endl;
         }
     }
 
@@ -3808,46 +3815,42 @@ void VulkanApplication::updateOverlay()
         // Определяем текущий режим на основе настроек
         int saveMode = 0;
 
-        // Важно: проверяем в правильном порядке
         if (yoloDataset.useDatasetStructure && yoloDataset.useTrainValSplit) {
-            saveMode = 2;  // YOLO with train/val split
+            saveMode = 2;
         } else if (yoloDataset.useDatasetStructure && !yoloDataset.useTrainValSplit) {
-            saveMode = 1;  // YOLO dataset structure
+            saveMode = 1;
         } else if (backgroundDataset.useBackgroundFolders) {
-            saveMode = 3;  // Background-based structure
+            saveMode = 3;
         } else {
-            saveMode = 0;  // Simple mode
+            saveMode = 0;
         }
 
-        // Сохраняем предыдущее значение для отслеживания изменений
         int previousSaveMode = saveMode;
 
         if (ui->combo("Save mode", &saveMode, saveModes)) {
-            // Обновляем настройки в соответствии с выбранным режимом
             switch (saveMode) {
-            case 0: // Simple mode
+            case 0:
                 backgroundDataset.useBackgroundFolders = false;
                 yoloDataset.useDatasetStructure = false;
                 yoloDataset.useTrainValSplit = false;
                 break;
-            case 1: // YOLO dataset structure
+            case 1:
                 backgroundDataset.useBackgroundFolders = false;
                 yoloDataset.useDatasetStructure = true;
                 yoloDataset.useTrainValSplit = false;
                 break;
-            case 2: // YOLO with train/val split
-                backgroundDataset.useBackgroundFolders = false;  // ВАЖНО: отключаем background
+            case 2:
+                backgroundDataset.useBackgroundFolders = false;
                 yoloDataset.useDatasetStructure = true;
                 yoloDataset.useTrainValSplit = true;
                 break;
-            case 3: // Background-based structure
+            case 3:
                 backgroundDataset.useBackgroundFolders = true;
                 yoloDataset.useDatasetStructure = false;
                 yoloDataset.useTrainValSplit = false;
                 break;
             }
 
-            // Если изменился режим на train/val split, сбрасываем счетчики
             if (previousSaveMode != saveMode && saveMode == 2) {
                 yoloDataset.trainCount = 0;
                 yoloDataset.valCount = 0;
@@ -3857,9 +3860,44 @@ void VulkanApplication::updateOverlay()
 
         ImGui::Separator();
 
+        // === НОВАЯ СЕКЦИЯ: Выбор разрешения ===
+        ImGui::Text("Screenshot resolution:");
+
+        // Checkbox для включения/выключения ресайза
+        ui->checkbox("Resize screenshots", &screenshotResolutions.resizeEnabled);
+
+        if (screenshotResolutions.resizeEnabled) {
+            // Создаем список строк с разрешениями для комбобокса
+            std::vector<std::string> resStrings;
+            for (const auto& res : screenshotResolutions.resolutions) {
+                resStrings.push_back(std::to_string(res.first) + "x" + std::to_string(res.second));
+            }
+
+            // Комбобокс для выбора разрешения
+            if (ui->combo("Resolution", &screenshotResolutions.selectedIndex, resStrings)) {
+                // Обновляем выбранное разрешение
+                screenshotResolutions.selectedWidth =
+                    screenshotResolutions.resolutions[screenshotResolutions.selectedIndex].first;
+                screenshotResolutions.selectedHeight =
+                    screenshotResolutions.resolutions[screenshotResolutions.selectedIndex].second;
+            }
+
+            // Отображаем текущее разрешение
+            ImGui::Text("  Current: %dx%d",
+                        screenshotResolutions.selectedWidth,
+                        screenshotResolutions.selectedHeight);
+        }
+
+        // Отображаем информацию о том, какой размер будет сохранен
+        if (useStaticBackground && textures.background.image) {
+            glm::vec4 displayRect = calculateBackgroundDisplayRect();
+            ImGui::Text("Background area: %.0fx%.0f", displayRect.z, displayRect.w);
+        }
+
+        ImGui::Separator();
+
         // === Настройки в зависимости от режима ===
-        // === Настройки в зависимости от режима ===
-        if (saveMode == 1 || saveMode == 2) { // YOLO dataset structures
+        if (saveMode == 1 || saveMode == 2) {
             static char datasetPathBuffer[256];
             strncpy(datasetPathBuffer, yoloDataset.datasetPath.c_str(), sizeof(datasetPathBuffer));
             datasetPathBuffer[sizeof(datasetPathBuffer) - 1] = '\0';
@@ -3870,11 +3908,10 @@ void VulkanApplication::updateOverlay()
                 yoloDataset.datasetPath = datasetPathBuffer;
             }
 
-            if (saveMode == 2) { // Train/val split mode
+            if (saveMode == 2) {
                 ImGui::Text("Train/val split:");
                 ImGui::SameLine();
                 if (ImGui::SliderFloat("##split", &yoloDataset.trainSplit, 0.5f, 0.95f, "%.2f")) {
-                    // Ограничиваем разумными значениями
                     if (yoloDataset.trainSplit < 0.5f) yoloDataset.trainSplit = 0.5f;
                     if (yoloDataset.trainSplit > 0.95f) yoloDataset.trainSplit = 0.95f;
                 }
@@ -3884,13 +3921,11 @@ void VulkanApplication::updateOverlay()
             }
 
             if (ui->button("Create YOLO dataset folders")) {
-                // Сбрасываем счетчики при создании новой структуры
                 yoloDataset.trainCount = 0;
                 yoloDataset.valCount = 0;
                 createYOLODatasetStructure();
             }
 
-            // Показываем текущие счетчики если используется train/val split
             if (saveMode == 2) {
                 ImGui::Text("Current counts:");
                 ImGui::Text("  Train: %d, Val: %d", yoloDataset.trainCount, yoloDataset.valCount);
@@ -3899,10 +3934,9 @@ void VulkanApplication::updateOverlay()
 
         ImGui::Separator();
 
-        // === Настройки класса (общие для всех режимов) ===
+        // === Настройки класса ===
         ImGui::Text("Class settings:");
 
-        // ID класса
         ImGui::Text("Class ID:");
         ImGui::SameLine();
         if (ImGui::InputInt("##classid", &yoloData.classId, 1, 10)) {
@@ -3910,7 +3944,6 @@ void VulkanApplication::updateOverlay()
             if (yoloData.classId > 999) yoloData.classId = 999;
         }
 
-        // Имя класса
         static char classNameBuffer[256];
         strncpy(classNameBuffer, yoloData.className.c_str(), sizeof(classNameBuffer));
         classNameBuffer[sizeof(classNameBuffer) - 1] = '\0';
@@ -3932,7 +3965,6 @@ void VulkanApplication::updateOverlay()
         if (width >= 1.0f && height >= 1.0f) {
             ImGui::Text("  Size: %.1f x %.1f px", width, height);
 
-            // YOLO нормализованные координаты
             float normCenterX = (selectionRect.left + width/2.0f) / sceneViewport.width;
             float normCenterY = (selectionRect.top + height/2.0f) / sceneViewport.height;
             float normWidth = width / sceneViewport.width;
@@ -3956,24 +3988,38 @@ void VulkanApplication::updateOverlay()
         int nextNum;
         std::string nextPathInfo;
 
-        if (saveMode == 2) { // Background-based
+        if (saveMode == 2) {
             nextNum = getNextScreenshotNumberForBackground();
             nextPathInfo = backgroundDataset.basePath + "/" +
                            backgroundDataset.currentBackground + "/";
-        } else if (saveMode == 1) { // YOLO dataset
+        } else if (saveMode == 1) {
             nextNum = getNextScreenshotNumber();
             nextPathInfo = yoloDataset.datasetPath + "/";
-        } else { // Simple mode
+        } else {
             nextNum = getNextScreenshotNumber();
             nextPathInfo = "./";
         }
 
         ImGui::Text("Next save location:");
         ImGui::Text("  Path: %s", nextPathInfo.c_str());
-        ImGui::Text("  Image: frame_%02d.png", nextNum);
-        ImGui::Text("  Label: frame_%02d.txt", nextNum);
+        ImGui::Text("  Image: frame_%06d.png", nextNum);
+        ImGui::Text("  Label: frame_%06d.txt", nextNum);
 
-        if (saveMode == 1) { // YOLO dataset
+        // Добавляем информацию о размере
+        if (screenshotResolutions.resizeEnabled) {
+            ImGui::Text("  Size: %dx%d",
+                        screenshotResolutions.selectedWidth,
+                        screenshotResolutions.selectedHeight);
+        } else {
+            if (useStaticBackground && textures.background.image) {
+                glm::vec4 displayRect = calculateBackgroundDisplayRect();
+                ImGui::Text("  Size: %.0fx%.0f (background)", displayRect.z, displayRect.w);
+            } else {
+                ImGui::Text("  Size: %dx%d (viewport)", sceneViewport.width, sceneViewport.height);
+            }
+        }
+
+        if (saveMode == 1) {
             ImGui::Text("  Classes: classes.txt");
         }
 
@@ -4112,11 +4158,24 @@ void VulkanApplication::updateOverlay()
             glm::vec4 displayRect = calculateBackgroundDisplayRect();
             ui->text("Background display size: %d x %d",
                      static_cast<int>(displayRect.z), static_cast<int>(displayRect.w));
-            ui->text("Screenshot will be: %d x %d",
-                     static_cast<int>(displayRect.z), static_cast<int>(displayRect.w));
+
+            if (screenshotResolutions.resizeEnabled) {
+                ui->text("Screenshot will be resized to: %d x %d",
+                         screenshotResolutions.selectedWidth,
+                         screenshotResolutions.selectedHeight);
+            } else {
+                ui->text("Screenshot will be: %d x %d (background)",
+                         static_cast<int>(displayRect.z), static_cast<int>(displayRect.w));
+            }
         } else {
-            ui->text("Screenshot size: %d x %d",
-                     sceneViewport.width, sceneViewport.height);
+            if (screenshotResolutions.resizeEnabled) {
+                ui->text("Screenshot will be resized to: %d x %d",
+                         screenshotResolutions.selectedWidth,
+                         screenshotResolutions.selectedHeight);
+            } else {
+                ui->text("Screenshot size: %d x %d (viewport)",
+                         sceneViewport.width, sceneViewport.height);
+            }
         }
     }
 

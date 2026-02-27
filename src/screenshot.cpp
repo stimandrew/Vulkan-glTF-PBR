@@ -59,7 +59,7 @@ void Screenshot::createCommandBuffer() {
     VK_CHECK_RESULT(vkCreateFence(device->logicalDevice, &fenceInfo, nullptr, &context.fence));
 }
 
-void Screenshot::copyImageToBuffer(VkImage srcImage, uint32_t width, uint32_t height) {
+void Screenshot::copyImageToBuffer(VkImage srcImage, uint32_t x, uint32_t y, uint32_t width, uint32_t height) {
     VkCommandBufferBeginInfo cmdBufBeginInfo{};
     cmdBufBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     VK_CHECK_RESULT(vkBeginCommandBuffer(context.commandBuffer, &cmdBufBeginInfo));
@@ -84,7 +84,7 @@ void Screenshot::copyImageToBuffer(VkImage srcImage, uint32_t width, uint32_t he
                          0, nullptr,
                          1, &imageMemoryBarrier);
 
-    // Копируем изображение в буфер
+    // Копируем указанную область изображения в буфер
     VkBufferImageCopy region{};
     region.bufferOffset = 0;
     region.bufferRowLength = 0;
@@ -93,7 +93,7 @@ void Screenshot::copyImageToBuffer(VkImage srcImage, uint32_t width, uint32_t he
     region.imageSubresource.mipLevel = 0;
     region.imageSubresource.baseArrayLayer = 0;
     region.imageSubresource.layerCount = 1;
-    region.imageOffset = { 0, 0, 0 };
+    region.imageOffset = { static_cast<int32_t>(x), static_cast<int32_t>(y), 0 };
     region.imageExtent = { width, height, 1 };
 
     vkCmdCopyImageToBuffer(context.commandBuffer, srcImage,
@@ -116,14 +116,14 @@ void Screenshot::copyImageToBuffer(VkImage srcImage, uint32_t width, uint32_t he
     VK_CHECK_RESULT(vkEndCommandBuffer(context.commandBuffer));
 }
 
-bool Screenshot::capture(VkImage srcImage, uint32_t width, uint32_t height, VkImageLayout currentLayout) {
+bool Screenshot::capture(VkImage srcImage, uint32_t x, uint32_t y, uint32_t width, uint32_t height, VkImageLayout currentLayout) {
     if (context.isComplete) {
         cleanup();
     }
 
     createStagingBuffer(width, height);
     createCommandBuffer();
-    copyImageToBuffer(srcImage, width, height);
+    copyImageToBuffer(srcImage, x, y, width, height);
 
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;

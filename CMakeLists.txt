@@ -127,7 +127,7 @@ function(compile_shader SHADER_PATH)
     if(EXISTS ${SHADER_PATH})
         add_custom_command(
             OUTPUT ${OUTPUT_FILE}
-            COMMAND ${GLSLC_EXECUTABLE} -V -o ${OUTPUT_FILE} ${SHADER_PATH}
+            COMMAND ${GLSLC_EXECUTABLE} -o ${OUTPUT_FILE} ${SHADER_PATH}
             DEPENDS ${SHADER_PATH}
             COMMENT "Compiling ${SHADER_FULL_NAME} -> ${SHADER_FULL_NAME}.spv"
             VERBATIM

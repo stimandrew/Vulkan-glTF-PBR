@@ -32,7 +32,7 @@ private:
 
     void createStagingBuffer(uint32_t width, uint32_t height);
     void createCommandBuffer();
-    void copyImageToBuffer(VkImage srcImage, uint32_t width, uint32_t height);
+    void copyImageToBuffer(VkImage srcImage, uint32_t x, uint32_t y, uint32_t width, uint32_t height);
     void savePPM(const std::string& filename);
     void savePNG(const std::string& filename);
 
@@ -40,7 +40,7 @@ public:
     Screenshot(vks::VulkanDevice* vulkanDevice, VkQueue transferQueue, VkCommandPool cmdPool);
     ~Screenshot();
 
-    bool capture(VkImage srcImage, uint32_t width, uint32_t height, VkImageLayout currentLayout);
+    bool capture(VkImage srcImage, uint32_t x, uint32_t y, uint32_t width, uint32_t height, VkImageLayout currentLayout);
     bool isComplete();
     std::vector<uint8_t> getPixels();
     void saveToFile(const std::string& filename);

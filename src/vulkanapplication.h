@@ -46,6 +46,30 @@ private:
 
 public:
 
+    // Добавьте в секцию public после других структур
+    struct CaptureArea {
+        uint32_t x, y, width, height;
+        bool isValid = false;
+    } captureArea;
+
+    // Структура для настроек разрешения скриншотов
+    struct ScreenshotResolution {
+        bool resizeEnabled = true;           // Включено ли изменение размера
+        uint32_t selectedWidth = 1280;        // Выбранная ширина
+        uint32_t selectedHeight = 720;        // Выбранная высота
+
+        // Предопределенные разрешения
+        std::vector<std::pair<uint32_t, uint32_t>> resolutions = {
+            {640, 360},
+            {1280, 720},
+            {1920, 1080},
+            {2560, 1440},
+            {3840, 2160}
+        };
+
+        int selectedIndex = 1; // Индекс выбранного разрешения (по умолчанию 1280x720)
+    } screenshotResolutions;
+
     void loadLastImageNumber();
     void saveLastImageNumber();
 
