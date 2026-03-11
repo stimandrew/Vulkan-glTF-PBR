@@ -2333,7 +2333,7 @@ void VulkanApplication::loadAssets()
 
     textures.empty.loadFromFile(assetpath + "textures/empty.ktx", VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
 
-    std::string sceneFile = assetpath + "models/DamagedHelmet/glTF-Embedded/DamagedHelmet.gltf";
+    std::string sceneFile = assetpath + "models/Gubka_160x55_blend.glb";
     std::string envMapFile = assetpath + "environments/papermill.ktx";
     for (size_t i = 0; i < args.size(); i++) {
         if ((std::string(args[i]).find(".gltf") != std::string::npos) || (std::string(args[i]).find(".glb") != std::string::npos)) {
@@ -3739,13 +3739,13 @@ void VulkanApplication::updateOverlay()
 
         // Добавляем слайдеры для перемещения модели
         ui->text("Model Position:");
-        if (ui->slider("X Position", &modelPosition.x, -15.0f, 15.0f)) {
+        if (ui->slider("X Position", &modelPosition.x, -1.50f, 1.50f)) {
             updateUniformData(); // Обновляем uniform данные при изменении
         }
-        if (ui->slider("Y Position", &modelPosition.y, -10.0f, 10.0f)) {
+        if (ui->slider("Y Position", &modelPosition.y, -1.0f, 1.0f)) {
             updateUniformData();
         }
-        if (ui->slider("Z Position", &modelPosition.z, -25.0f, 2.0f)) {
+        if (ui->slider("Z Position", &modelPosition.z, -2.50f, 2.50f)) {
             updateUniformData();
         }
 
@@ -4455,12 +4455,12 @@ glm::vec3 VulkanApplication::getRandomVisiblePosition()
     glm::vec3 randomPos;
 
     // Диапазоны из UI слайдеров
-    const float minX = -15.0f;
-    const float maxX = 15.0f;
-    const float minY = -10.0f;
-    const float maxY = 10.0f;
-    const float minZ = -25.0f;
-    const float maxZ = 2.0f;
+    const float minX = -1.50f;
+    const float maxX = 1.50f;
+    const float minY = -1.0f;
+    const float maxY = 1.0f;
+    const float minZ = -2.50f;
+    const float maxZ = 0.20f;
 
     for (int attempt = 0; attempt < maxAttempts; attempt++) {
         // Генерируем случайную позицию в пределах диапазонов из UI
