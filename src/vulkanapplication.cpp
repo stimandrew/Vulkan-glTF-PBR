@@ -29,7 +29,7 @@ VulkanApplication::VulkanApplication() : VulkanExampleBase()
 
     // Инициализация фона
     useStaticBackground = true;
-    backgroundFile = "./../data/backgrounds/background1.jpg";
+    backgroundFile = "./../data/backgrounds/background9.jpg";
     backgroundLoadRequested = true;  // Запросить загрузку фона
 
 #if defined(TINYGLTF_ENABLE_DRACO)
@@ -144,7 +144,7 @@ void VulkanApplication::loadLastImageNumber()
         file >> yoloDataset.lastImageNumber;
         file.close();
     } else {
-        yoloDataset.lastImageNumber = 0;
+        yoloDataset.lastImageNumber = 250000;
     }
 }
 
@@ -175,10 +175,10 @@ void VulkanApplication::loadDefaultBackground()
     // Пробуем разные варианты путей
     std::vector<std::string> possiblePaths = {
         backgroundFile,                                      // ./../data/backgrounds/background1.jpg
-        "data/backgrounds/background1.jpg",                  // data/backgrounds/background1.jpg
-        "./data/backgrounds/background1.jpg",                // ./data/backgrounds/background1.jpg
-        "../data/backgrounds/background1.jpg",                // ../data/backgrounds/background1.jpg
-        "/home/ab/Vulkan-glTF-PBR/data/backgrounds/background1.jpg" // Абсолютный путь
+        "data/backgrounds/background9.jpg",                  // data/backgrounds/background1.jpg
+        "./data/backgrounds/background9.jpg",                // ./data/backgrounds/background1.jpg
+        "../data/backgrounds/background9.jpg",                // ../data/backgrounds/background1.jpg
+        "/home/ab/Vulkan-glTF-PBR/data/backgrounds/background9.jpg" // Абсолютный путь
     };
 
     std::string loadedPath;
@@ -4291,10 +4291,10 @@ void VulkanApplication::render()
         // Пробуем разные варианты путей
         std::vector<std::string> possiblePaths = {
             backgroundFile,
-            "data/backgrounds/background1.jpg",
-            "./data/backgrounds/background1.jpg",
-            "../data/backgrounds/background1.jpg",
-            "/home/ab/Vulkan-glTF-PBR/data/backgrounds/background1.jpg"
+            "data/backgrounds/background9.jpg",
+            "./data/backgrounds/background9.jpg",
+            "../data/backgrounds/background9.jpg",
+            "/home/ab/Vulkan-glTF-PBR/data/backgrounds/background9.jpg"
         };
 
         std::string loadedPath;

@@ -99,7 +99,7 @@ public:
         int trainCount = 0;
         int valCount = 0;
         bool useTrainValSplit = true;
-        int lastImageNumber = 0; // Добавить это поле
+        int lastImageNumber = 250000; // Добавить это поле
     } yoloDataset;
 
     struct BackgroundDataset {
@@ -112,7 +112,7 @@ public:
         bool randomPositionAndRotation = true;  // Случайное перемещение и вращение
         bool randomPositionOnly = false;         // Только случайное перемещение
         bool randomRotationOnly = false;         // Только случайное вращение
-        int imageCount = 300000;                     // Количество изображений для генерации
+        int imageCount = 50000;                     // Количество изображений для генерации
         bool isGenerating = false;                // Флаг процесса генерации
         int currentImageIndex = 0;                 // Текущий индекс при генерации
         bool needNextImage = false;                // Флаг необходимости следующего изображения
